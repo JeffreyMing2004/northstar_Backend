@@ -13,4 +13,5 @@ public interface UserRepository extends JpaRepository<User, Long> {
     boolean existsByEmail(String email);
     boolean existsByMcId(String mcId);
     List<User> findByOrderByScoreDesc();
+    List<User> findAllByOrderByCreatedAtDesc();
 }

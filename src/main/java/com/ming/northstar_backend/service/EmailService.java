@@ -55,6 +55,21 @@ public class EmailService {
         return false;
     }
 
+    public void sendBetaApprovalEmail(String email, String displayName) {
+        String name = displayName == null || displayName.isBlank() ? "玩家" : displayName.trim();
+        try {
+            var message = mailSender.createMimeMessage();
+            var helper = new MimeMessageHelper(message, true, "UTF-8");
+            helper.setFrom("northstar2026@yeah.net", "NorthStar MC竞技平台");
+            helper.setTo(email);
+            helper.setSubject("【NorthStar】内测资格已通过");
+            helper.setText(buildBetaApprovalHtml(name), true);
+            mailSender.send(message);
+        } catch (Exception e) {
+            throw new RuntimeException("内测通知邮件发送失败: " + e.getMessage());
+        }
+    }
+
     private String buildHtml(String code) {
         StringBuilder sb = new StringBuilder();
         sb.append("<div style=\"max-width:480px;margin:0 auto;background:#161a16;border:1px solid rgba(255,140,0,0.15);padding:40px;font-family:sans-serif;color:#e8e8e8;\">");
@@ -68,5 +83,30 @@ public class EmailService {
         sb.append("<hr style=\"border:none;border-top:1px solid rgba(255,140,0,0.1);margin:24px 0;\">");
         sb.append("<p style=\"color:#555;font-size:11px;text-align:center;\">\u00a9 NorthStar MC\u7ade\u6280\u5e73\u53f0</p></div>");
         return sb.toString();
+    }
+
+    private String buildBetaApprovalHtml(String displayName) {
+        return "<div style=\"max-width:520px;margin:0 auto;background:#161a16;border:1px solid rgba(255,140,0,0.15);padding:40px;font-family:sans-serif;color:#e8e8e8;\">"
+            + "<div style=\"text-align:center;margin-bottom:32px;\">"
+            + "<div style=\"display:inline-block;width:56px;height:56px;background:#ff8c00;color:#000;font-weight:900;font-size:28px;line-height:56px;font-family:monospace;\">N</div>"
+            + "<h1 style=\"margin:16px 0 0;font-size:22px;color:#fff;\">NorthStar 内测资格已通过</h1></div>"
+            + "<p style=\"color:#8a8a8a;font-size:14px;line-height:1.8;\">你好 "
+            + escapeHtml(displayName)
+            + "，你的 NorthStar MC竞技平台内测申请已通过。</p>"
+            + "<div style=\"border:1px solid rgba(76,175,80,0.3);background:rgba(76,175,80,0.08);padding:18px;margin:24px 0;\">"
+            + "<p style=\"margin:0 0 8px;color:#4caf50;font-weight:700;\">标准内测资格</p>"
+            + "<p style=\"margin:0;color:#8a8a8a;font-size:13px;\">可体验模式：全部竞技模式</p>"
+            + "<p style=\"margin:8px 0 0;color:#8a8a8a;font-size:13px;\">有效期至：2026-12-31</p></div>"
+            + "<p style=\"color:#8a8a8a;font-size:14px;line-height:1.8;\">登录 NorthStar 后即可进入房间大厅参与内测。资格信息可在“内测资格”页面查询。</p>"
+            + "<hr style=\"border:none;border-top:1px solid rgba(255,140,0,0.1);margin:24px 0;\">"
+            + "<p style=\"color:#555;font-size:11px;text-align:center;\">© NorthStar MC竞技平台</p></div>";
+    }
+
+    private String escapeHtml(String value) {
+        return value.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&#39;");
     }
 }

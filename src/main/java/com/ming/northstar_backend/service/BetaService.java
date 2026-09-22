@@ -2,6 +2,7 @@ package com.ming.northstar_backend.service;
 
 import com.ming.northstar_backend.dto.BetaApplyRequest;
 import com.ming.northstar_backend.dto.BetaCheckResponse;
+import com.ming.northstar_backend.dto.AdminBetaGrantRequest;
 import com.ming.northstar_backend.entity.BetaApplication;
 import com.ming.northstar_backend.entity.User;
 import com.ming.northstar_backend.repository.BetaApplicationRepository;
@@ -10,6 +11,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Objects;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.time.format.DateTimeFormatter;
 
 @Service
@@ -80,6 +85,96 @@ public class BetaService {
 
         user.setBetaStatus("approved");
         return userRepo.save(user);
+    }
+
+    @Transactional
+    public BetaApplication grantBetaAccess(AdminBetaGrantRequest request) {
+        String email = normalize(request == null ? null : request.getEmail());
+        String username = normalize(request == null ? null : request.getUsername());
+        String mcId = normalize(request == null ? null : request.getMcId());
+        String requestedReason = normalize(request == null ? null : request.getReason());
+        String reason = (requestedReason.isBlank() ? "manual" : requestedReason).toLowerCase(Locale.ROOT);
+
+        validateEmail(email);
+        if (!Set.of("manual", "veteran", "competitive", "content", "tester", "other").contains(reason)) {
+            throw new RuntimeException("内测添加理由无效");
+        }
+        if (!username.isBlank() && username.length() > 32) {
+            throw new RuntimeException("用户名长度不能超过32个字符");
+        }
+        if (!mcId.isBlank() && !mcId.matches("^[a-zA-Z0-9_]{3,16}$")) {
+            throw new RuntimeException("Minecraft ID 格式无效");
+        }
+
+        User user = resolveUser(email, username, mcId);
+        if (user != null) {
+            if ("approved".equals(user.getBetaStatus())) {
+                throw new RuntimeException("该玩家已拥有内测资格");
+            }
+            BetaApplication application = betaRepo
+                .findFirstByUserIdAndStatusOrderByCreatedAtDesc(user.getId(), "pending");
+            if (application == null) application = new BetaApplication();
+            application.setUserId(user.getId());
+            application.setEmail(email);
+            application.setUsername(user.getUsername());
+            application.setMcId(user.getMcId());
+            application.setReason(reason);
+            application.setStatus("approved");
+            application = betaRepo.save(application);
+
+            user.setBetaStatus("approved");
+            user.setUpdatedAt(java.time.LocalDateTime.now());
+            userRepo.save(user);
+            return application;
+        }
+
+        for (BetaApplication candidate : betaRepo.findByStatusAndUserIdIsNull("approved")) {
+            if (equalsIgnoreCase(candidate.getEmail(), email)
+                || equalsIgnoreCase(candidate.getUsername(), username)
+                || equalsIgnoreCase(candidate.getMcId(), mcId)) {
+                throw new RuntimeException("该玩家已有内测资格");
+            }
+        }
+
+        BetaApplication application = new BetaApplication();
+        application.setUserId(null);
+        application.setEmail(email);
+        application.setUsername(username);
+        application.setMcId(mcId);
+        application.setReason(reason);
+        application.setStatus("approved");
+        return betaRepo.save(application);
+    }
+
+    private User resolveUser(String email, String username, String mcId) {
+        List<User> matches = new ArrayList<>();
+        addIfAbsent(matches, userRepo.findByEmail(email).orElse(null));
+        if (!username.isBlank()) addIfAbsent(matches, userRepo.findByUsername(username).orElse(null));
+        if (!mcId.isBlank()) addIfAbsent(matches, userRepo.findByMcId(mcId).orElse(null));
+
+        if (matches.size() > 1) {
+            throw new RuntimeException("邮箱、用户名和 Minecraft ID 对应不同的玩家");
+        }
+        return matches.isEmpty() ? null : matches.get(0);
+    }
+
+    private void addIfAbsent(List<User> users, User user) {
+        if (user != null && users.stream().noneMatch(existing -> Objects.equals(existing.getId(), user.getId()))) {
+            users.add(user);
+        }
+    }
+
+    private void validateEmail(String email) {
+        if (email.length() > 128) {
+            throw new RuntimeException("邮箱长度不能超过128个字符");
+        }
+        if (!email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) {
+            throw new RuntimeException("邮箱格式无效");
+        }
+    }
+
+    private String normalize(String value) {
+        return value == null ? "" : value.trim();
     }
 
     private BetaApplication findApprovedCandidate(String query) {

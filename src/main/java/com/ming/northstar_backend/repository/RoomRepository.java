@@ -9,4 +9,6 @@ public interface RoomRepository extends JpaRepository<Room, Long> {
     List<Room> findByModeKey(String modeKey);
     List<Room> findByStatusAndModeKey(String status, String modeKey);
     List<Room> findTop4ByStatusOrderByCurrentPlayersDesc(String status);
+    List<Room> findAllByOrderByCreatedAtDesc();
+    long countByStatusIn(List<String> statuses);
 }

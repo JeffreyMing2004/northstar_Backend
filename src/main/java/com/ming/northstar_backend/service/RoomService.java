@@ -33,7 +33,10 @@ public class RoomService {
         } else {
             rooms = roomRepo.findAll();
         }
-        return rooms.stream().map(RoomDto::from).collect(Collectors.toList());
+        return rooms.stream()
+            .filter(room -> !"closed".equals(room.getStatus()))
+            .map(RoomDto::from)
+            .collect(Collectors.toList());
     }
 
     public List<RoomDto> getHotRooms() {
@@ -61,6 +64,9 @@ public class RoomService {
     public RoomDto joinRoom(Long roomId, Long userId) {
         Room room = roomRepo.findById(roomId)
             .orElseThrow(() -> new RuntimeException("房间不存在"));
+        if ("closed".equals(room.getStatus())) {
+            throw new RuntimeException("房间已关闭");
+        }
         if (room.getCurrentPlayers() >= room.getMaxPlayers()) {
             throw new RuntimeException("房间已满");
         }

@@ -81,6 +81,12 @@ public class StatsService {
         return getPlayerStats(user.getUsername());
     }
 
+    public void invalidatePlayerCache(String username) {
+        try {
+            redis.delete(List.of(LB_KEY, STATS_PREFIX + username));
+        } catch (Exception ignored) {}
+    }
+
     private java.util.Optional<User> resolvePlayer(String playerId) {
         String value = playerId == null ? "" : playerId.trim();
         java.util.Optional<User> byUsername = userRepo.findByUsername(value);

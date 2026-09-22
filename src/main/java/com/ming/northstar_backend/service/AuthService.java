@@ -15,13 +15,16 @@ public class AuthService {
     private final JwtUtil jwtUtil;
     private final EmailService emailService;
     private final BetaService betaService;
+    private final AdminAccessService adminAccessService;
 
-    public AuthService(UserRepository userRepo, PasswordEncoder encoder, JwtUtil jwtUtil, EmailService emailService, BetaService betaService) {
+    public AuthService(UserRepository userRepo, PasswordEncoder encoder, JwtUtil jwtUtil, EmailService emailService,
+                       BetaService betaService, AdminAccessService adminAccessService) {
         this.userRepo = userRepo;
         this.encoder = encoder;
         this.jwtUtil = jwtUtil;
         this.emailService = emailService;
         this.betaService = betaService;
+        this.adminAccessService = adminAccessService;
     }
 
     public AuthResponse login(LoginRequest req) {
@@ -34,7 +37,7 @@ public class AuthService {
         }
 
         String token = jwtUtil.generateToken(user.getId(), user.getUsername());
-        return new AuthResponse(token, UserDto.from(user));
+        return new AuthResponse(token, UserDto.from(user, adminAccessService.roleFor(user.getUsername())));
     }
 
     public AuthResponse register(RegisterRequest req) {
@@ -67,13 +70,13 @@ public class AuthService {
         user = betaService.claimApprovedEligibility(user);
 
         String token = jwtUtil.generateToken(user.getId(), user.getUsername());
-        return new AuthResponse(token, UserDto.from(user));
+        return new AuthResponse(token, UserDto.from(user, adminAccessService.roleFor(user.getUsername())));
     }
 
     public UserDto getProfile(Long userId) {
         User user = userRepo.findById(userId)
             .orElseThrow(() -> new RuntimeException("用户不存在"));
-        return UserDto.from(user);
+        return UserDto.from(user, adminAccessService.roleFor(user.getUsername()));
     }
 
     public UserDto updateProfile(Long userId, UserDto update) {
@@ -83,7 +86,7 @@ public class AuthService {
         if (update.getMcId() != null) user.setMcId(update.getMcId());
         user = userRepo.save(user);
         user = betaService.claimApprovedEligibility(user);
-        return UserDto.from(user);
+        return UserDto.from(user, adminAccessService.roleFor(user.getUsername()));
     }
 
     public UserDto bindGameAccount(Long userId, String mcId) {
@@ -102,7 +105,7 @@ public class AuthService {
             .orElseThrow(() -> new RuntimeException("用户不存在"));
 
         if (mcId.equals(user.getMcId())) {
-            return UserDto.from(user);
+            return UserDto.from(user, adminAccessService.roleFor(user.getUsername()));
         }
 
         if (userRepo.existsByMcId(mcId)) {
@@ -112,6 +115,6 @@ public class AuthService {
         user.setMcId(mcId);
         user = userRepo.save(user);
         user = betaService.claimApprovedEligibility(user);
-        return UserDto.from(user);
+        return UserDto.from(user, adminAccessService.roleFor(user.getUsername()));
     }
 }

@@ -2,6 +2,8 @@ package com.ming.northstar_backend.dto;
 
 import com.ming.northstar_backend.entity.User;
 
+import java.time.LocalDateTime;
+
 public class UserDto {
     private Long id;
     private String username;
@@ -14,10 +16,16 @@ public class UserDto {
     private Integer totalKills;
     private Integer totalDeaths;
     private String betaStatus;
+    private String role;
+    private LocalDateTime createdAt;
 
     public UserDto() {}
 
     public static UserDto from(User u) {
+        return from(u, "user");
+    }
+
+    public static UserDto from(User u, String role) {
         UserDto dto = new UserDto();
         dto.id = u.getId();
         dto.username = u.getUsername();
@@ -30,6 +38,8 @@ public class UserDto {
         dto.totalKills = u.getTotalKills();
         dto.totalDeaths = u.getTotalDeaths();
         dto.betaStatus = u.getBetaStatus();
+        dto.role = role;
+        dto.createdAt = u.getCreatedAt();
         return dto;
     }
 
@@ -55,4 +65,8 @@ public class UserDto {
     public void setTotalDeaths(Integer totalDeaths) { this.totalDeaths = totalDeaths; }
     public String getBetaStatus() { return betaStatus; }
     public void setBetaStatus(String betaStatus) { this.betaStatus = betaStatus; }
+    public String getRole() { return role; }
+    public void setRole(String role) { this.role = role; }
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 }

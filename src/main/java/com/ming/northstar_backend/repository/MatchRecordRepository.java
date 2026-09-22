@@ -22,4 +22,5 @@ public interface MatchRecordRepository extends JpaRepository<MatchRecord, Long> 
     int maxKillsByUserId(@Param("userId") Long userId);
 
     List<MatchRecord> findTop10ByOrderByPlayedAtDesc();
+    List<MatchRecord> findTop50ByOrderByPlayedAtDesc();
 }

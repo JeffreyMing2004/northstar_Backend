@@ -7,5 +7,9 @@ import java.util.List;
 public interface BetaApplicationRepository extends JpaRepository<BetaApplication, Long> {
     List<BetaApplication> findByUserIdOrderByCreatedAtDesc(Long userId);
     boolean existsByUserIdAndStatus(Long userId, String status);
+    BetaApplication findFirstByUserIdAndStatusOrderByCreatedAtDesc(Long userId, String status);
     List<BetaApplication> findByStatusAndUserIdIsNull(String status);
+    List<BetaApplication> findAllByOrderByCreatedAtDesc();
+    List<BetaApplication> findByStatusOrderByCreatedAtDesc(String status);
+    long countByStatus(String status);
 }
