@@ -24,8 +24,8 @@ public class User {
      * 审批通过后由系统同步成白名单条目。
      *
      * <p>该字段一个账号只允许绑定一次，绑定后玩家不能自行修改
-     * （判定见 {@link com.ming.northstar_backend.support.QqBinding}）。
-     * 只有管理员出于纠错目的才能强制改写白名单里的 QQ。</p>
+     * （判定见 {@link com.ming.northstar_backend.support.OnceBinding}）。
+     * 只有管理员出于纠错目的才能强制改写。</p>
      */
     @Column(length = 16)
     private String qq;
@@ -33,9 +33,18 @@ public class User {
     /** QQ 首次绑定的时间；为 null 表示尚未绑定。 */
     private LocalDateTime qqBoundAt;
 
-    /** 玩家提交的离线服游戏 ID（Minecraft ID）。 */
+    /**
+     * 玩家提交的离线服游戏 ID（Minecraft ID）。与 QQ 同为内测资格凭据。
+     *
+     * <p>注册时即完成绑定，之后玩家不能自行更改（判定见
+     * {@link com.ming.northstar_backend.support.OnceBinding}），只有管理员能强制改写。
+     * 原因与 QQ 相同：白名单以「QQ + 游戏ID」为键，允许改绑等于允许把内测资格转手。</p>
+     */
     @Column(length = 64)
     private String mcId;
+
+    /** Minecraft ID 首次绑定的时间；为 null 表示尚未绑定。 */
+    private LocalDateTime mcIdBoundAt;
 
     @Column(length = 32)
     private String rank = "青铜I";
@@ -68,6 +77,8 @@ public class User {
     public void setQqBoundAt(LocalDateTime qqBoundAt) { this.qqBoundAt = qqBoundAt; }
     public String getMcId() { return mcId; }
     public void setMcId(String mcId) { this.mcId = mcId; }
+    public LocalDateTime getMcIdBoundAt() { return mcIdBoundAt; }
+    public void setMcIdBoundAt(LocalDateTime mcIdBoundAt) { this.mcIdBoundAt = mcIdBoundAt; }
     public String getRank() { return rank; }
     public void setRank(String rank) { this.rank = rank; }
     public Integer getScore() { return score; }

@@ -51,6 +51,26 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.ok(adminService.listBetaApplications(status)));
     }
 
+    /**
+     * 按账号状态重建客户端白名单（对账 / 修复历史数据）。
+     *
+     * <p>把「已获批 ⇒ 白名单必须有」与「已失去资格 ⇒ 系统同步的条目必须消失」
+     * 两条不变式对全部账号重新执行一遍。运营手工录入 / 导入的白名单条目完全不参与。</p>
+     */
+    @PostMapping("/beta/whitelist/sync-accounts")
+    public ResponseEntity<ApiResponse<WhitelistSyncResult>> syncApprovedWhitelist() {
+        return execute(() -> {
+            WhitelistSyncResult result = adminService.syncApprovedAccounts();
+            String message = "白名单对账完成：已获批 " + result.getApprovedPlayers()
+                + " 人，新建 " + result.getCreated()
+                + "，重建 " + result.getRefreshed()
+                + "，已一致 " + result.getUnchanged()
+                + "，清理孤儿 " + result.getRemoved()
+                + "，失败 " + result.getFailed();
+            return ApiResponse.ok(message, result);
+        });
+    }
+
     @GetMapping("/beta-plans")
     public ResponseEntity<ApiResponse<List<BetaPlanDto>>> getBetaPlans() {
         return ResponseEntity.ok(ApiResponse.ok(adminService.listBetaPlans()));

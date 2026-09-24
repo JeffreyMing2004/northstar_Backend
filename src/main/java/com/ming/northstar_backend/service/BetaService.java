@@ -8,6 +8,7 @@ import com.ming.northstar_backend.entity.BetaPlan;
 import com.ming.northstar_backend.entity.User;
 import com.ming.northstar_backend.repository.BetaApplicationRepository;
 import com.ming.northstar_backend.repository.UserRepository;
+import com.ming.northstar_backend.support.OnceBinding;
 import com.ming.northstar_backend.support.QqFormat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -151,7 +152,14 @@ public class BetaService {
             application.setStatus("approved");
             application = betaRepo.save(application);
 
-            user.setQq(application.getQq());
+            // 后台发放时以管理员填的 QQ 为准（留空则沿用玩家自己的）。
+            // 管理员不受「只能绑定一次」限制，所以走 forceSet，并把改动记进日志。
+            String qqBefore = user.getQq();
+            if (OnceBinding.forceSet(user, OnceBinding.Field.QQ, application.getQq())) {
+                log.info("后台发放内测资格时改写 QQ：用户 {}({}) {} -> {}", user.getUsername(), user.getId(),
+                        qqBefore == null ? "(未绑定)" : qqBefore,
+                        application.getQq() == null || application.getQq().isBlank() ? "(已解绑)" : application.getQq());
+            }
             user.setBetaStatus("approved");
             user.setUpdatedAt(java.time.LocalDateTime.now());
             userRepo.save(user);

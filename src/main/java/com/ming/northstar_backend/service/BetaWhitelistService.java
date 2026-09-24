@@ -5,6 +5,7 @@ import com.ming.northstar_backend.entity.BetaVerifyLog;
 import com.ming.northstar_backend.entity.BetaWhitelist;
 import com.ming.northstar_backend.repository.BetaVerifyLogRepository;
 import com.ming.northstar_backend.repository.BetaWhitelistRepository;
+import com.ming.northstar_backend.support.McIdFormat;
 import com.ming.northstar_backend.support.QqFormat;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -19,7 +20,6 @@ import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -52,8 +52,7 @@ public class BetaWhitelistService {
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm")
     );
 
-    /** 游戏 ID 的合法格式，与客户端登录名一致。 */
-    private static final Pattern GAME_ID_PATTERN = Pattern.compile("^[a-zA-Z0-9_]{3,16}$");
+    /** 游戏 ID 格式判定统一走 {@link McIdFormat}，不再本地维护正则。 */
 
     private final BetaWhitelistRepository whitelistRepo;
     private final BetaVerifyLogRepository logRepo;
@@ -501,7 +500,7 @@ public class BetaWhitelistService {
             return new SyncResult(SyncOutcome.INVALID_FORMAT, null);
         }
         String gameId = blankToNull(rawMcId);
-        if (gameId != null && !GAME_ID_PATTERN.matcher(gameId).matches()) {
+        if (gameId != null && !McIdFormat.isValid(gameId)) {
             return new SyncResult(SyncOutcome.INVALID_FORMAT, null);
         }
 
@@ -537,6 +536,168 @@ public class BetaWhitelistService {
     }
 
     // ------------------------------------------------------------------
+    // 账号 -> 白名单：查看与撤销
+    // ------------------------------------------------------------------
+
+    /** 客户端白名单对某个账号的可用性（供账号设置页展示）。 */
+    public enum QualificationStatus {
+        /** 条目存在，且处于启用、未过期状态。 */
+        ACTIVE,
+        /** 条目存在但被运营禁用。 */
+        DISABLED,
+        /** 条目存在但已过期。 */
+        EXPIRED,
+        /** 该账号没有任何白名单条目（还没获批，或资格刚被取消）。 */
+        MISSING
+    }
+
+    /**
+     * 白名单视角的资格描述。
+     *
+     * @param status 可用性
+     * @param entry  命中的条目；{@code MISSING} 时为 {@code null}
+     */
+    public record Qualification(QualificationStatus status, BetaWhitelist entry) {
+        public boolean usable() {
+            return status == QualificationStatus.ACTIVE;
+        }
+    }
+
+    /**
+     * 查询某个「QQ + 游戏ID」当前的白名单状态，供玩家在账号设置页自查。
+     *
+     * <p>与 {@link #verify} 的区别：不做限流、不写日志，只回答「白名单里现在长什么样」。
+     * 挑选口径与 {@code verify} 保持一致：同一 QQ 下优先选绑定游戏 ID 完全相同的那条，
+     * 其次选「不限定游戏 ID」的那条，最后才退到任意一条（便于提示「已停用 / 已过期」）。</p>
+     */
+    @Transactional(readOnly = true)
+    public Qualification describeQualification(String rawQq, String rawMcId) {
+        String qq = qqFormat.normalize(rawQq);
+        if (qq.isEmpty()) {
+            return new Qualification(QualificationStatus.MISSING, null);
+        }
+
+        List<BetaWhitelist> rows = whitelistRepo.findAllByQqOrderByCreatedAtAsc(qq);
+        if (rows.isEmpty()) {
+            return new Qualification(QualificationStatus.MISSING, null);
+        }
+
+        BetaWhitelist matched = null;    // 绑定游戏 ID 完全一致的
+        BetaWhitelist unbounded = null;  // 不限定游戏 ID 的
+        for (BetaWhitelist row : rows) {
+            if (row.getBoundGameId() == null) {
+                if (unbounded == null) {
+                    unbounded = row;
+                }
+            } else if (matched == null && row.matchesGameId(rawMcId)) {
+                matched = row;
+            }
+        }
+        BetaWhitelist chosen = matched != null ? matched : unbounded;
+        if (chosen == null) {
+            chosen = rows.get(0);
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        if (chosen.isUsable(now)) {
+            return new Qualification(QualificationStatus.ACTIVE, chosen);
+        }
+        if (chosen.getExpireAt() != null && !chosen.getExpireAt().isAfter(now)) {
+            return new Qualification(QualificationStatus.EXPIRED, chosen);
+        }
+        return new Qualification(QualificationStatus.DISABLED, chosen);
+    }
+
+    /**
+     * 取消内测资格时删除「系统同步」的白名单条目。
+     *
+     * <p>资格与白名单必须同进退：后台把某个玩家的内测资格取消掉，如果白名单还留着，
+     * 他照样能进游戏——「取消」就成了一句空话。本方法与 {@link #syncApprovedPlayer}
+     * 成对使用，分别负责两个方向。</p>
+     *
+     * <p><b>只删 {@code source=account} 的条目</b>：运营在后台手工录入 / 导入的记录
+     * （例如给主播、赞助者单独开的白名单）不属于任何账号审批，撤资格时绝不能被连带清掉。</p>
+     *
+     * <p>之所以要传多个身份值：管理员可能在同一笔操作里既改了 QQ / 游戏 ID 又取消了资格，
+     * 只按「当前值」删就会留下用旧 QQ 建的孤儿条目，那条记录会一直在白名单里放行。</p>
+     *
+     * @param rawQqs   相关的 QQ（改动前后都传进来）
+     * @param rawMcIds 相关的游戏 ID（改动前后都传进来）
+     * @return 实际删除的条目数；0 表示本来就没有系统同步的条目（幂等）
+     */
+    @Transactional
+    public int revokeAccountEntries(Collection<String> rawQqs, Collection<String> rawMcIds) {
+        Set<String> qqs = normalizeKeys(rawQqs, true);
+        Set<String> gameIds = normalizeKeys(rawMcIds, false);
+        if (qqs.isEmpty() && gameIds.isEmpty()) {
+            return 0;
+        }
+
+        Map<Long, BetaWhitelist> victims = new LinkedHashMap<>();
+        for (String qq : qqs) {
+            for (BetaWhitelist row : whitelistRepo.findAllByQqOrderByCreatedAtAsc(qq)) {
+                if (row.isSystemManaged() && row.getId() != null) {
+                    victims.put(row.getId(), row);
+                }
+            }
+        }
+        if (!gameIds.isEmpty()) {
+            for (BetaWhitelist row : listAccountManagedEntries()) {
+                String bound = row.getBoundGameId();
+                if (row.getId() != null && bound != null && gameIds.contains(bound.toLowerCase(Locale.ROOT))) {
+                    victims.put(row.getId(), row);
+                }
+            }
+        }
+
+        if (victims.isEmpty()) {
+            return 0;
+        }
+        whitelistRepo.deleteAll(victims.values());
+        return victims.size();
+    }
+
+    /**
+     * 删除指定的系统同步条目（对账批量清理用）。人工条目一律跳过。
+     *
+     * @return 实际删除的条数
+     */
+    @Transactional
+    public int deleteAccountManagedEntries(Collection<BetaWhitelist> entries) {
+        if (entries == null || entries.isEmpty()) {
+            return 0;
+        }
+        List<BetaWhitelist> victims = entries.stream()
+                .filter(entry -> entry != null && entry.isSystemManaged() && entry.getId() != null)
+                .collect(Collectors.toList());
+        if (victims.isEmpty()) {
+            return 0;
+        }
+        whitelistRepo.deleteAll(victims);
+        return victims.size();
+    }
+
+    /** 全部由账号审批自动同步而来的条目（用于对账 / 修复历史数据）。 */
+    @Transactional(readOnly = true)
+    public List<BetaWhitelist> listAccountManagedEntries() {
+        return whitelistRepo.findAllByOrderByCreatedAtDesc().stream()
+                .filter(BetaWhitelist::isSystemManaged)
+                .collect(Collectors.toList());
+    }
+
+    /** 去除空白与空值；{@code lowerCase} 用于游戏 ID 的忽略大小写比较。 */
+    private Set<String> normalizeKeys(Collection<String> raw, boolean lowerCase) {
+        if (raw == null) {
+            return Set.of();
+        }
+        return raw.stream()
+                .map(McIdFormat::normalize)
+                .filter(value -> !value.isEmpty())
+                .map(value -> lowerCase ? value.toLowerCase(Locale.ROOT) : value)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    // ------------------------------------------------------------------
     // 内部工具
     // ------------------------------------------------------------------
 
@@ -546,7 +707,7 @@ public class BetaWhitelistService {
         }
         if (request.getMcId() != null) {
             String gameId = blankToNull(request.getMcId());
-            if (gameId != null && !GAME_ID_PATTERN.matcher(gameId).matches()) {
+            if (gameId != null && !McIdFormat.isValid(gameId)) {
                 throw new RuntimeException("游戏ID 格式无效（3-16 位字母、数字或下划线）");
             }
             entry.setMcId(gameId);

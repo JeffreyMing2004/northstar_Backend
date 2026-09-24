@@ -11,6 +11,7 @@ public class UserDto {
     private String qq;
     private LocalDateTime qqBoundAt;
     private String mcId;
+    private LocalDateTime mcIdBoundAt;
     private String rank;
     private Integer score;
     private Integer wins;
@@ -19,6 +20,15 @@ public class UserDto {
     private Integer totalDeaths;
     private String betaStatus;
     private String role;
+    /**
+     * 客户端白名单状态：{@code active} / {@code disabled} / {@code expired} / {@code missing}。
+     *
+     * <p>只有「当前登录用户自己」的接口会填充（账号设置页要显示）；
+     * 后台玩家列表刻意不填，避免为每个用户都去查一次白名单。</p>
+     */
+    private String whitelistStatus;
+    /** 白名单条目的到期时间；null 表示长期有效或没有条目。 */
+    private LocalDateTime whitelistExpireAt;
     private boolean adminLocked;
     private LocalDateTime createdAt;
 
@@ -36,6 +46,7 @@ public class UserDto {
         dto.qq = u.getQq();
         dto.qqBoundAt = u.getQqBoundAt();
         dto.mcId = u.getMcId();
+        dto.mcIdBoundAt = u.getMcIdBoundAt();
         dto.rank = u.getRank();
         dto.score = u.getScore();
         dto.wins = u.getWins();
@@ -60,6 +71,8 @@ public class UserDto {
     public void setQqBoundAt(LocalDateTime qqBoundAt) { this.qqBoundAt = qqBoundAt; }
     public String getMcId() { return mcId; }
     public void setMcId(String mcId) { this.mcId = mcId; }
+    public LocalDateTime getMcIdBoundAt() { return mcIdBoundAt; }
+    public void setMcIdBoundAt(LocalDateTime mcIdBoundAt) { this.mcIdBoundAt = mcIdBoundAt; }
     public String getRank() { return rank; }
     public void setRank(String rank) { this.rank = rank; }
     public Integer getScore() { return score; }
@@ -76,6 +89,10 @@ public class UserDto {
     public void setBetaStatus(String betaStatus) { this.betaStatus = betaStatus; }
     public String getRole() { return role; }
     public void setRole(String role) { this.role = role; }
+    public String getWhitelistStatus() { return whitelistStatus; }
+    public void setWhitelistStatus(String whitelistStatus) { this.whitelistStatus = whitelistStatus; }
+    public LocalDateTime getWhitelistExpireAt() { return whitelistExpireAt; }
+    public void setWhitelistExpireAt(LocalDateTime whitelistExpireAt) { this.whitelistExpireAt = whitelistExpireAt; }
     public boolean isAdminLocked() { return adminLocked; }
     public void setAdminLocked(boolean adminLocked) { this.adminLocked = adminLocked; }
     public LocalDateTime getCreatedAt() { return createdAt; }
