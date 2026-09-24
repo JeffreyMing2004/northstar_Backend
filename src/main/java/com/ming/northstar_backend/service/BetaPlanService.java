@@ -71,9 +71,22 @@ public class BetaPlanService {
     }
 
     public BetaPlan requirePlan(Long planId) {
-        return planId == null
-            ? null
-            : planRepo.findById(planId).orElseThrow(() -> new RuntimeException("内测计划不存在"));
+        if (planId == null) return null;
+        BetaPlan plan = findPlan(planId);
+        if (plan == null) {
+            throw new RuntimeException("内测计划不存在");
+        }
+        return plan;
+    }
+
+    /**
+     * 查计划，查不到返回 {@code null}。
+     *
+     * <p>专供「展示历史申请」这类场景：计划的 id 是历史快照，运营把计划删掉之后
+     * 玩家的申请记录还在，这时不能因为计划找不到就把整个查询接口炸成 500。</p>
+     */
+    public BetaPlan findPlan(Long planId) {
+        return planId == null ? null : planRepo.findById(planId).orElse(null);
     }
 
     public BetaPlan requireOpenPlan(Long planId) {

@@ -68,6 +68,10 @@ public class BetaController {
         return ResponseEntity.status(outcome.httpStatus()).body(outcome.body());
     }
 
+    /**
+     * 提交内测申请。<b>必须登录</b>——申请记录挂在登录账号上，QQ / 游戏 ID 也全部
+     * 从账号读取，请求体里的 {@code query} 会被忽略。
+     */
     @PostMapping("/apply")
     public ResponseEntity<ApiResponse<String>> applyForBeta(Authentication auth, @RequestBody BetaApplyRequest req) {
         Long userId = (Long) auth.getPrincipal();
@@ -77,6 +81,18 @@ public class BetaController {
         } catch (RuntimeException e) {
             return ResponseEntity.badRequest().body(ApiResponse.error(400, e.getMessage()));
         }
+    }
+
+    /**
+     * 查询「我」的内测申请状态（需登录）。
+     *
+     * <p>前端用它把「可申请 / 审核中 / 已通过」三种界面区分开，避免已申请过的玩家
+     * 反复点提交、每次都只拿到一句「你已提交过申请」。</p>
+     */
+    @GetMapping("/my-application")
+    public ResponseEntity<ApiResponse<MyBetaApplicationDto>> myApplication(Authentication auth) {
+        Long userId = (Long) auth.getPrincipal();
+        return ResponseEntity.ok(ApiResponse.ok(betaService.getMyApplication(userId)));
     }
 
     /**

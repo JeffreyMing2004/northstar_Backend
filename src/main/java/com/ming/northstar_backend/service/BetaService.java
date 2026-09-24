@@ -3,6 +3,7 @@ package com.ming.northstar_backend.service;
 import com.ming.northstar_backend.dto.BetaApplyRequest;
 import com.ming.northstar_backend.dto.BetaCheckResponse;
 import com.ming.northstar_backend.dto.AdminBetaGrantRequest;
+import com.ming.northstar_backend.dto.MyBetaApplicationDto;
 import com.ming.northstar_backend.entity.BetaApplication;
 import com.ming.northstar_backend.entity.BetaPlan;
 import com.ming.northstar_backend.entity.User;
@@ -68,6 +69,18 @@ public class BetaService {
         return res;
     }
 
+    /**
+     * 提交内测申请。
+     *
+     * <p><b>身份一律取自登录账号</b>：{@code userId} 是 JWT 里的用户 id，申请记录里的
+     * 用户名 / QQ / 游戏 ID 全部从 {@code users} 表现读，请求体里带什么都不作数。
+     * 所以这个接口必须登录才能调用（{@code SecurityConfig} 里 <b>没有</b>把
+     * {@code /api/beta/apply} 放进 {@code permitAll}，未登录会被拦在 403），
+     * 也就不会出现「用别人的 QQ 帮别人申请」这种代填。</p>
+     *
+     * <p>审批通过后要按「QQ + 游戏 ID」同步客户端白名单，所以这两项缺失虽然不拦申请，
+     * 但前端应当提示玩家先去账号设置补齐，否则资格发下来也进不去游戏。</p>
+     */
     public void applyForBeta(Long userId, BetaApplyRequest req) {
         if (betaRepo.existsByUserIdAndStatus(userId, "pending")) {
             throw new RuntimeException("你已提交过申请，请等待审核");
@@ -90,6 +103,27 @@ public class BetaService {
         app.setMcId(user.getMcId());
         app.setReason(req.getReason());
         betaRepo.save(app);
+    }
+
+    /**
+     * 当前登录账号最近一次的内测申请状态。
+     *
+     * <p>没有任何申请记录时返回 {@code hasApplication=false}（而不是报错）：玩家第一次
+     * 打开内测页时就是这个状态，前端据此把表单显示出来。</p>
+     */
+    public MyBetaApplicationDto getMyApplication(Long userId) {
+        User user = userRepo.findById(userId)
+            .orElseThrow(() -> new RuntimeException("用户不存在"));
+
+        List<BetaApplication> applications = betaRepo.findByUserIdOrderByCreatedAtDesc(userId);
+        if (applications.isEmpty()) {
+            return MyBetaApplicationDto.none(user.getBetaStatus());
+        }
+
+        // 计划可能已被运营删除，这里用不抛异常的查找，避免整条查询挂掉
+        BetaApplication latest = applications.get(0);
+        return MyBetaApplicationDto.from(
+            latest, betaPlanService.findPlan(latest.getPlanId()), user.getBetaStatus());
     }
 
     @Transactional
