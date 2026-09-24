@@ -17,6 +17,7 @@ public class UserDto {
     private Integer totalDeaths;
     private String betaStatus;
     private String role;
+    private boolean adminLocked;
     private LocalDateTime createdAt;
 
     public UserDto() {}
@@ -67,6 +68,8 @@ public class UserDto {
     public void setBetaStatus(String betaStatus) { this.betaStatus = betaStatus; }
     public String getRole() { return role; }
     public void setRole(String role) { this.role = role; }
+    public boolean isAdminLocked() { return adminLocked; }
+    public void setAdminLocked(boolean adminLocked) { this.adminLocked = adminLocked; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 }

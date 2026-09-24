@@ -23,4 +23,5 @@ public interface MatchRecordRepository extends JpaRepository<MatchRecord, Long> 
 
     List<MatchRecord> findTop10ByOrderByPlayedAtDesc();
     List<MatchRecord> findTop50ByOrderByPlayedAtDesc();
+    void deleteByUserId(Long userId);
 }

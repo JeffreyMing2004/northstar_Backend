@@ -4,11 +4,19 @@ import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "rooms")
+@Table(name = "rooms", uniqueConstraints = {
+        @UniqueConstraint(name = "uk_rooms_server_external", columnNames = {"server_id", "external_id"})
+})
 public class Room {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(length = 64)
+    private String serverId;
+
+    @Column(length = 64)
+    private String externalId;
 
     @Column(nullable = false, length = 64)
     private String name;
@@ -42,6 +50,10 @@ public class Room {
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
+    public String getServerId() { return serverId; }
+    public void setServerId(String serverId) { this.serverId = serverId; }
+    public String getExternalId() { return externalId; }
+    public void setExternalId(String externalId) { this.externalId = externalId; }
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
     public String getMode() { return mode; }

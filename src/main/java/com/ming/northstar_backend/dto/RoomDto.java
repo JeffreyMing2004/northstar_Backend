@@ -4,6 +4,8 @@ import com.ming.northstar_backend.entity.Room;
 
 public class RoomDto {
     private Long id;
+    private String serverId;
+    private String externalId;
     private String name;
     private String mode;
     private String modeKey;
@@ -20,6 +22,8 @@ public class RoomDto {
     public static RoomDto from(Room r) {
         RoomDto dto = new RoomDto();
         dto.id = r.getId();
+        dto.serverId = r.getServerId();
+        dto.externalId = r.getExternalId();
         dto.name = r.getName();
         dto.mode = r.getMode();
         dto.modeKey = r.getModeKey();
@@ -35,6 +39,10 @@ public class RoomDto {
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
+    public String getServerId() { return serverId; }
+    public void setServerId(String serverId) { this.serverId = serverId; }
+    public String getExternalId() { return externalId; }
+    public void setExternalId(String externalId) { this.externalId = externalId; }
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
     public String getMode() { return mode; }

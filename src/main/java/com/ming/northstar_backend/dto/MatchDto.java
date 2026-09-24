@@ -20,18 +20,24 @@ public class MatchDto {
 
     public static MatchDto from(MatchRecord m, String username) {
         MatchDto dto = new MatchDto();
+        int kills = valueOrZero(m.getKills());
+        int deaths = valueOrZero(m.getDeaths());
         dto.id = m.getId();
         dto.username = username;
         dto.mode = m.getMode();
         dto.mapName = m.getMapName();
-        dto.win = m.getWin();
-        dto.kills = m.getKills();
-        dto.deaths = m.getDeaths();
-        dto.assists = m.getAssists();
-        dto.scoreChange = m.getScoreChange();
-        dto.kd = m.getDeaths() == 0 ? String.valueOf(m.getKills()) : String.format("%.2f", m.getKills() * 1.0 / m.getDeaths());
+        dto.win = Boolean.TRUE.equals(m.getWin());
+        dto.kills = kills;
+        dto.deaths = deaths;
+        dto.assists = valueOrZero(m.getAssists());
+        dto.scoreChange = valueOrZero(m.getScoreChange());
+        dto.kd = deaths == 0 ? String.valueOf(kills) : String.format("%.2f", kills * 1.0 / deaths);
         dto.playedAt = m.getPlayedAt() != null ? m.getPlayedAt().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) : "";
         return dto;
+    }
+
+    private static int valueOrZero(Integer value) {
+        return value == null ? 0 : value;
     }
 
     public Long getId() { return id; }
