@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>内测验证接口 - 实现说明 v3.0</title>
+<style>
+:root{--bd:#e3e6ea;--tx:#1f2328;--tx2:#57606a;--bg:#fff;--soft:#f6f8fa;--acc:#185FA5;}
+*{box-sizing:border-box}
+body{margin:0;background:#f2f4f7;color:var(--tx);
+ font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+.wrap{max-width:960px;margin:0 auto;padding:40px 20px 80px;}
+.card{background:var(--bg);border:1px solid var(--bd);border-radius:12px;padding:44px 52px;}
+h1{font-size:26px;font-weight:600;margin:0 0 20px;padding-bottom:16px;border-bottom:2px solid var(--acc);}
+h2{font-size:20px;font-weight:600;margin:40px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--bd);}
+h3{font-size:16px;font-weight:600;margin:26px 0 10px;}
+h4{font-size:15px;font-weight:600;margin:20px 0 8px;color:var(--tx2);}
+p{margin:10px 0;}
+a{color:var(--acc);}
+code{background:var(--soft);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;
+ font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;font-size:13px;}
+pre{background:#1b1f24;color:#e6edf3;border-radius:8px;padding:16px 18px;overflow-x:auto;line-height:1.6;}
+pre code{background:none;border:none;color:inherit;padding:0;font-size:13px;}
+table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14px;display:table;}
+th,td{border:1px solid var(--bd);padding:8px 12px;text-align:left;vertical-align:top;}
+th{background:var(--soft);font-weight:600;}
+tr:nth-child(even) td{background:#fbfcfd;}
+blockquote{margin:14px 0;padding:10px 16px;background:#fff8e6;border-left:4px solid #EF9F27;border-radius:0 6px 6px 0;}
+blockquote p{margin:4px 0;}
+hr{border:none;border-top:1px solid var(--bd);margin:34px 0;}
+ul,ol{padding-left:26px;margin:10px 0;}
+li{margin:5px 0;}
+.cb{display:inline-block;width:12px;height:12px;border:1.5px solid #b9c0c8;border-radius:3px;
+ margin-right:8px;vertical-align:-1px;background:#fff;}
+@media print{body{background:#fff}.card{border:none;padding:0}.wrap{padding:0;max-width:none}pre{background:#f6f8fa;color:#1f2328;border:1px solid var(--bd)}}
+</style>
+</head>
+<body><div class="wrap"><div class="card">
+<h1 id="_1">内测验证接口 — 实现说明</h1>
+<blockquote>
+<p>本文档说明 <code>northstar_backend</code> 中「北极战区内测资格校验」的实现方式、部署配置与自测方法。
+完整的<strong>字段级契约</strong>见客户端仓库的
+<code>NorthStarClientverification/docs/NorthStar-内测验证接口文档.md</code>（v3.0）。</p>
+<p><strong>v3.0 核心变化</strong>：北极战区是<strong>离线模式</strong>服务器，玩家 UUID 由各启动器自行生成、
+每次启动都可能不同，<strong>不能作为身份依据</strong>。因此身份判定改为
+<strong>QQ + 游戏ID（<code>mcId</code>）</strong>，<code>uuid</code> 参数已从接口中移除。</p>
+</blockquote>
+<hr>
+<h2 id="1">1. 这次加了什么</h2>
+<table>
+<thead>
+<tr>
+<th>接口</th>
+<th>方法</th>
+<th>路径</th>
+<th>鉴权</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>A</strong> 内测资格校验</td>
+<td>GET</td>
+<td><code>/api/beta/verify?qq=&amp;name=</code></td>
+<td>匿名（<code>permitAll</code>）</td>
+</tr>
+<tr>
+<td>B-1 分页查询白名单</td>
+<td>GET</td>
+<td><code>/api/admin/beta/whitelist</code></td>
+<td><code>ROLE_ADMIN</code></td>
+</tr>
+<tr>
+<td>B-2 新增白名单</td>
+<td>POST</td>
+<td><code>/api/admin/beta/whitelist</code></td>
+<td><code>ROLE_ADMIN</code></td>
+</tr>
+<tr>
+<td>B-3 修改白名单</td>
+<td>PUT</td>
+<td><code>/api/admin/beta/whitelist/{id}</code></td>
+<td><code>ROLE_ADMIN</code></td>
+</tr>
+<tr>
+<td>B-4 删除白名单</td>
+<td>DELETE</td>
+<td><code>/api/admin/beta/whitelist/{id}</code></td>
+<td><code>ROLE_ADMIN</code></td>
+</tr>
+<tr>
+<td>B-5 JSON 批量导入</td>
+<td>POST</td>
+<td><code>/api/admin/beta/whitelist/import</code></td>
+<td><code>ROLE_ADMIN</code></td>
+</tr>
+<tr>
+<td>B-6 文本批量导入</td>
+<td>POST</td>
+<td><code>/api/admin/beta/whitelist/import-csv?replace=false</code></td>
+<td><code>ROLE_ADMIN</code></td>
+</tr>
+<tr>
+<td>B-7 导出 CSV</td>
+<td>GET</td>
+<td><code>/api/admin/beta/whitelist/export</code></td>
+<td><code>ROLE_ADMIN</code></td>
+</tr>
+<tr>
+<td>B-8 校验日志</td>
+<td>GET</td>
+<td><code>/api/admin/beta/verify-logs</code></td>
+<td><code>ROLE_ADMIN</code></td>
+</tr>
+</tbody>
+</table>
+<p>新增/改动文件：</p>
+<pre><code>src/main/java/com/ming/northstar_backend/
+├── entity/BetaWhitelist.java                    新增  白名单表实体（唯一键 qq+mc_id）
+├── entity/BetaVerifyLog.java                    新增  校验日志表实体
+├── repository/BetaWhitelistRepository.java      新增  findAllByQqOrderByCreatedAtAsc
+├── repository/BetaVerifyLogRepository.java      新增
+├── dto/BetaVerifyResponse.java                  新增  接口 A 专用响应体（契约核心）
+├── dto/BetaVerifyData.java                      新增  含 gameId / matchedBy
+├── dto/BetaWhitelistDto.java                    新增  含 gameIdBound
+├── dto/BetaWhitelistRequest.java                新增  mcId 参与校验
+├── dto/BetaWhitelistImportRequest.java          新增
+├── dto/BetaWhitelistImportResult.java           新增
+├── dto/BetaVerifyLogDto.java                    新增（含 QQ 脱敏、matchedBy）
+├── dto/PageResult.java                          新增
+├── service/BetaWhitelistService.java            新增  校验 + 限流 + 日志 + CRUD + 导入导出
+├── controller/BetaController.java               改动  新增 GET /verify（只用 qq + name）
+├── controller/AdminBetaWhitelistController.java 新增  接口 B
+└── config/SecurityConfig.java                   改动  /api/beta/verify 放行
+
+src/main/resources/application.properties        改动  新增 northstar.verify.* 三项配置
+
+src/test/java/com/ming/northstar_backend/
+├── service/BetaWhitelistServiceTest.java        新增  27 项
+├── controller/BetaVerifyContractTest.java       新增   6 项（JSON 序列化契约）
+└── BetaVerifyEndToEndTest.java                  新增   4 项（真实 HTTP）
+</code></pre>
+<hr>
+<h2 id="2">2. ⚠️ 三条不能碰的红线</h2>
+<p>客户端 Mod 的判定逻辑是「先看 HTTP 状态码，再看 <code>success</code> / <code>code</code>」，改动接口时必须守住：</p>
+<ol>
+<li>
+<p><strong>「明确未通过」必须返回 <code>HTTP 200</code> + <code>success:false</code> + <code>code:1001</code>。</strong>
+   这是唯一会让玩家客户端<strong>生成崩溃报告并退出游戏</strong>的响应 —— 这是设计如此，不要"优化"成 4xx。</p>
+</li>
+<li>
+<p><strong>服务异常必须返回非 2xx（400/429/5xx）。</strong>
+   一旦服务异常也返回 <code>200 + success:false</code>，会把<strong>全体玩家</strong>踢出游戏。客户端对非 2xx <strong>完全不解析响应体</strong>，只看状态码。</p>
+</li>
+<li>
+<p><strong><code>success</code> 必须是 JSON 布尔值。</strong>
+   数字 <code>1</code> 会被判为「服务不可用」（玩家反复重试）；字符串 <code>"1"</code> 会被判为「未通过」（玩家崩溃）。</p>
+</li>
+</ol>
+<p>另外：<strong>接口 A 的响应体不能套 <code>ApiResponse</code></strong>（不能写成 <code>{"code":200,...,"data":{...}}</code> 再往里塞）。
+客户端支持 <code>code:200</code> 只是兼容性兜底；<code>success</code> 是首选字段，务必保留。</p>
+<hr>
+<h2 id="3">3. 判定与状态码一览</h2>
+<p>判定顺序（<code>BetaWhitelistService.verify</code>）：</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>场景</th>
+<th>HTTP</th>
+<th>响应体要点</th>
+<th>玩家体感</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>qq</code> 格式非法</td>
+<td>400</td>
+<td><code>success:false, code:4000</code></td>
+<td>停在验证界面可重试</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>name</code>（游戏ID）为空</td>
+<td>400</td>
+<td><code>success:false, code:4000</code></td>
+<td>停在验证界面可重试</td>
+</tr>
+<tr>
+<td>3</td>
+<td>单 IP 超限流</td>
+<td>429</td>
+<td><code>success:false, code:4290</code></td>
+<td>停在验证界面可重试</td>
+</tr>
+<tr>
+<td>4</td>
+<td>QQ 不在白名单</td>
+<td>200</td>
+<td><code>success:false, code:1001</code></td>
+<td><strong>崩溃退出</strong></td>
+</tr>
+<tr>
+<td>5</td>
+<td>有记录但全部禁用 / 已过期</td>
+<td>200</td>
+<td><code>success:false, code:1001</code></td>
+<td><strong>崩溃退出</strong></td>
+</tr>
+<tr>
+<td>6</td>
+<td>可用记录且 <code>mcId</code> 与 <code>name</code> 一致（忽略大小写）</td>
+<td>200</td>
+<td><code>success:true, code:0</code></td>
+<td>正常进入游戏</td>
+</tr>
+<tr>
+<td>7</td>
+<td>可用记录且 <code>mcId</code> 为空</td>
+<td>200</td>
+<td><code>success:true, code:0</code></td>
+<td>正常进入游戏</td>
+</tr>
+<tr>
+<td>8</td>
+<td>可用记录但绑定了别的游戏ID</td>
+<td>200</td>
+<td><code>success:false, code:1001</code></td>
+<td><strong>崩溃退出</strong></td>
+</tr>
+<tr>
+<td>9</td>
+<td>内部异常（DB 等）</td>
+<td>500</td>
+<td><code>success:false, code:5000</code></td>
+<td>停在验证界面可重试</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>第 7 条（未绑定游戏ID 放行）可用 <code>northstar.verify.require-mc-id=true</code> <strong>关闭</strong>。
+第 2 条<strong>故意返回 400 而不是 1001</strong>：离线模式下 <code>name</code> 是唯一身份依据之一，缺失说明客户端
+调用有误，属于「可重试」而不是「判定为不合格」，否则会误崩合法玩家。</p>
+</blockquote>
+<h3 id="31">3.1 拒绝原因文案（写入日志；也会出现在崩溃报告的「响应内容」里）</h3>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th><code>reason</code>（日志，128 字符内）</th>
+<th><code>msg</code>（响应体）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>QQ 不在白名单</td>
+<td><code>QQ 不在白名单</code></td>
+<td><code>该 QQ 未获得内测资格</code></td>
+</tr>
+<tr>
+<td>资格被禁用</td>
+<td><code>资格已被禁用</code></td>
+<td><code>该 QQ 的资格已被禁用</code></td>
+</tr>
+<tr>
+<td>资格已过期</td>
+<td><code>资格已过期</code></td>
+<td><code>该 QQ 的资格已过期</code></td>
+</tr>
+<tr>
+<td>游戏ID 不匹配</td>
+<td><code>游戏ID 与绑定不一致（已绑定 Steve）</code></td>
+<td><code>游戏ID「Alex」与白名单绑定的不一致（已绑定：Steve）</code></td>
+</tr>
+<tr>
+<td>要求绑定但未绑定</td>
+<td><code>该 QQ 未绑定游戏ID</code></td>
+<td><code>该 QQ 未登记游戏ID，请联系管理员补充绑定</code></td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="4">4. 配置</h2>
+<p><code>application.properties</code> 新增三项，都有安全默认值：</p>
+<pre><code class="language-properties"># 与客户端 qqPattern 保持一致，改动需两侧同步
+northstar.verify.qq-pattern=${VERIFY_QQ_PATTERN:^[1-9]\\d{4,10}$}
+# 每来源 IP 每分钟允许次数，&lt;=0 关闭限流
+northstar.verify.rate-limit-per-minute=${VERIFY_RATE_LIMIT_PER_MINUTE:60}
+# 是否强制要求白名单条目已绑定游戏ID（mcId）
+northstar.verify.require-mc-id=${VERIFY_REQUIRE_MC_ID:false}
+</code></pre>
+<blockquote>
+<p>⚠️ <strong><code>require-mc-id=true</code> 之前必须确认白名单里每条都填了 <code>mcId</code></strong>，否则这些 QQ 的玩家会<strong>全部崩溃</strong>。</p>
+</blockquote>
+<h3 id="41-x-forwarded-for">4.1 反向代理必须写 <code>X-Forwarded-For</code></h3>
+<p>服务端按 <code>X-Forwarded-For</code>（取第一个）→ <code>X-Real-IP</code> → <code>remoteAddr</code> 取客户端 IP。
+生产环境前面是 Nginx / OpenResty 时，<strong>若反代没有写入 <code>X-Forwarded-For</code>，所有玩家的 <code>remoteAddr</code> 都是 <code>127.0.0.1</code>，限流会把全体玩家当成同一个人</strong>。</p>
+<p>Nginx 参考：</p>
+<pre><code class="language-nginx">location /api/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+</code></pre>
+<h3 id="42-qq">4.2 建议在反代日志中对 <code>qq</code> 脱敏</h3>
+<p>接口是 GET，QQ 会进访问日志。可在 Nginx 用 <code>map</code> + <code>log_format</code> 把 <code>qq=123456789</code> 改写成 <code>qq=123****89</code>。
+后台接口 <code>/verify-logs</code> 默认已脱敏（<code>showQq=true</code> 可看完整值）。</p>
+<hr>
+<h2 id="5">5. 数据库</h2>
+<p><code>ddl-auto=update</code>，启动时自动建表，无需手工执行 DDL。</p>
+<ul>
+<li><code>northstar_beta_whitelist</code>：唯一键是 <strong><code>(qq, mc_id)</code> 组合</strong>（<code>uk_beta_whitelist_qq_mcid</code>）。
+  同一个 QQ 可以绑多个游戏ID（例如小号）；<code>mc_id</code> 为 NULL 表示「只绑 QQ，不限定游戏ID」。</li>
+<li><code>northstar_verify_log</code>：每次校验写一条，增长较快。后台日志查询固定只取<strong>最近 1000 条</strong>再过滤分页；
+  建议按 90 天做归档/清理（可用定时任务删除 <code>created_at &lt; now - 90d</code>）。</li>
+</ul>
+<h3 id="51-mc_id-v30">5.1 <code>mc_id</code> 的语义（<strong>v3.0 起参与校验</strong>）</h3>
+<table>
+<thead>
+<tr>
+<th><code>mc_id</code></th>
+<th>含义</th>
+<th>校验行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>有值（如 <code>Steve</code>）</td>
+<td>该 QQ 绑定到这个游戏ID</td>
+<td>上报的游戏ID 必须一致（忽略大小写），否则<strong>判未通过</strong></td>
+</tr>
+<tr>
+<td><code>NULL</code> / 空</td>
+<td>只绑 QQ，不限定游戏ID</td>
+<td>任意游戏ID 都放行；<code>require-mc-id=true</code> 时改判<strong>未通过</strong></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>后台列表返回的 <code>gameIdBound</code> 字段就是「是否已绑定」，建议前端对 <code>false</code> 的行加醒目提示。</p>
+</blockquote>
+<h3 id="52-v20">5.2 🔧 从 v2.0 升级（<strong>必须手工处理索引</strong>）</h3>
+<p><code>ddl-auto=update</code> <strong>只会新增、不会删除</strong>旧索引和旧列。若在 v3.0 之前已经启动过服务建过表：</p>
+<pre><code class="language-sql">-- 查看现有索引（v2.0 时代 qq 上有一个单列唯一约束）
+SHOW INDEX FROM northstar_beta_whitelist;
+-- 删掉它，否则同一个 QQ 绑定第二个游戏ID 会被数据库拒绝
+ALTER TABLE northstar_beta_whitelist DROP INDEX `qq`;
+-- 已废弃的 UUID 列（保留也无害）
+ALTER TABLE northstar_beta_whitelist DROP COLUMN player_uuid;
+ALTER TABLE northstar_verify_log     DROP COLUMN player_uuid;
+</code></pre>
+<blockquote>
+<p><strong>尚未上线过就最简单</strong>：
+<code>DROP TABLE northstar_beta_whitelist; DROP TABLE northstar_verify_log;</code>
+让服务重建即可（白名单本来也要重新导入）。</p>
+</blockquote>
+<hr>
+<h2 id="6">6. 自测</h2>
+<pre><code class="language-bash"># 全量测试（用 H2，不会连生产库）
+./gradlew test
+
+# 只跑内测验证相关
+./gradlew test --tests '*BetaWhitelistServiceTest' \
+               --tests '*BetaVerifyContractTest' \
+               --tests '*BetaVerifyEndToEndTest'
+</code></pre>
+<p>测试覆盖：</p>
+<table>
+<thead>
+<tr>
+<th>测试类</th>
+<th>项数</th>
+<th>覆盖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BetaWhitelistServiceTest</code></td>
+<td>27</td>
+<td>游戏ID 命中/不匹配/忽略大小写/未绑定放行/严格模式/多绑定择一、禁用、过期、<code>qq</code>/<code>name</code> 缺失、DB 异常、限流、CRUD、组合唯一性、导入导出、日志脱敏与 <code>matchedBy</code></td>
+</tr>
+<tr>
+<td><code>BetaVerifyContractTest</code></td>
+<td>6</td>
+<td><code>success</code> 字段名与布尔类型、<code>code</code> 取值、状态码映射、参数转发（只有 qq+name）、代理 IP 解析</td>
+</tr>
+<tr>
+<td><code>BetaVerifyEndToEndTest</code></td>
+<td>4</td>
+<td><strong>真实 HTTP</strong>：接口 A 匿名可达且契约正确（含游戏ID 三分支）、同一 QQ 多绑定、管理接口需鉴权、既有 <code>/api/beta/check</code> 未被影响</td>
+</tr>
+</tbody>
+</table>
+<p><code>BetaVerifyEndToEndTest</code> 会真的启动 Tomcat 并用 <code>HttpClient</code> 打请求，是最接近线上的验证。</p>
+<h3 id="61">6.1 手工联调</h3>
+<pre><code class="language-bash">BASE=&quot;http://127.0.0.1:8080/api/beta/verify&quot;
+
+# 通过：QQ 在名单里且 name 与绑定一致
+curl -i &quot;$BASE?qq=123456789&amp;name=Steve&quot;
+# 未通过：游戏ID 与绑定不一致（客户端会崩溃退出）
+curl -i &quot;$BASE?qq=123456789&amp;name=Alex&quot;
+# 400：qq 非法 / name 缺失（可重试）
+curl -i &quot;$BASE?qq=abc&amp;name=Steve&quot;
+curl -i &quot;$BASE?qq=123456789&quot;
+</code></pre>
+<hr>
+<h2 id="7">7. 上线检查清单</h2>
+<ul>
+<li><span class="cb"></span><strong>确认已导入白名单，且每条的 <code>mcId</code> 填的是玩家真实游戏ID</strong>。
+      白名单为空 = <strong>全员崩溃</strong>；游戏ID 填错 = <strong>该玩家崩溃</strong>。这是最严重的事故来源。
+      稳妥做法：先只导入 1 个测试 QQ（并填好游戏ID），用客户端跑通
+      「有资格进得去 / 游戏ID 不匹配崩溃 / 无资格崩溃」三条路径，再批量导入。</li>
+<li><span class="cb"></span>若把 <code>require-mc-id</code> 设为 <code>true</code>，<strong>再次确认没有 <code>gameIdBound=false</code> 的条目</strong></li>
+<li><span class="cb"></span>反代已写入 <code>X-Forwarded-For</code></li>
+<li><span class="cb"></span>反代访问日志已对 <code>qq</code> 参数脱敏</li>
+<li><span class="cb"></span>接口用 HTTPS（客户端允许 http，但生产必须 https）</li>
+<li><span class="cb"></span>管理接口确认未暴露公网（已强制 <code>ROLE_ADMIN</code>，建议再加 IP 白名单）</li>
+<li><span class="cb"></span>隐私政策已说明采集 QQ 号的用途与保留期限</li>
+</ul>
+<hr>
+<h2 id="8">8. 已知取舍</h2>
+<ul>
+<li><strong>「游戏ID」比 UUID 更弱</strong>：离线模式下玩家名是玩家自己可改的，因此「QQ + 游戏ID」只能证明
+  "知道这个 QQ 且用了这个名字"，不等于强身份。要绑定真正的人，建议在发号环节人工核对游戏ID。</li>
+<li><strong>限流是单机内存滑动窗口</strong>：重启清零、多实例不共享。当前规模够用；
+  若横向扩容，建议换成 Redis 计数（项目已引入 <code>spring-boot-starter-data-redis</code>）。</li>
+<li><strong>接口无鉴权令牌</strong>：知道地址即可查询「某 QQ+游戏ID 是否有资格」。若需更强防护，
+  下一版可加 HMAC-SHA256 签名（对 <code>qq|name|timestamp</code> 用共享密钥签名，<strong>签名里不含 UUID</strong>），
+  需 Mod 侧同步改动。</li>
+<li><strong>本验证是客户端行为，可被绕过</strong>（改配置 / 抓包 / 删 <code>verification.json</code> / 反编译 Mod）。
+  它适合做<strong>内测资格分发与统计</strong>，<strong>不能当作多人服务器的安全边界</strong>。
+  真要防未授权进入，必须在服务端做校验。</li>
+</ul>
+</div></div></body></html>
