@@ -40,13 +40,16 @@ li{margin:5px 0;}
 <blockquote>
 <p>本文档说明 <code>northstar_backend</code> 中「北极战区内测资格校验」的实现方式、部署配置与自测方法。
 完整的<strong>字段级契约</strong>见客户端仓库的
-<code>NorthStarClientverification/docs/NorthStar-内测验证接口文档.md</code>（v3.0）。</p>
+<code>NorthStarClientverification/docs/NorthStar-内测验证接口文档.md</code>（v3.5）。</p>
 <p><strong>v3.0 核心变化</strong>：北极战区是<strong>离线模式</strong>服务器，玩家 UUID 由各启动器自行生成、
 每次启动都可能不同，<strong>不能作为身份依据</strong>。因此身份判定改为
 <strong>QQ + 游戏ID（<code>mcId</code>）</strong>，<code>uuid</code> 参数已从接口中移除。</p>
 <p><strong>v3.1 补充</strong>：服务端<strong>不启用 MC 白名单</strong>，判定完全在后端做。为了让「审批通过」真的能放行，
 注册平台新增 QQ 字段（<code>POST /api/auth/register</code> 的 <code>qq</code>），内测审批通过时后端会
 <strong>自动把该玩家的「QQ + 离线服游戏 ID」同步成白名单条目</strong>，运营不必再手工维护。详见 §5.3。</p>
+<p><strong>v3.5 补充</strong>：<strong>内测申请必须登录平台账号</strong>。申请记录直接挂在 <code>users.id</code> 上，QQ 与游戏 ID
+一律从账号读取、请求体里带什么都不作数——所以不会出现「拿别人的 QQ 替别人占名额」。
+前端配套把申请区从「查询失败才出现」提升为独立区块，未登录只给登录 / 注册入口。详见 §5.6。</p>
 </blockquote>
 <hr>
 <h2 id="1">1. 这次加了什么</h2>
@@ -120,6 +123,24 @@ li{margin:5px 0;}
 <td><code>/api/admin/beta/whitelist/sync-accounts</code></td>
 <td><code>ROLE_ADMIN</code></td>
 </tr>
+<tr>
+<td>C-1 提交内测申请</td>
+<td>POST</td>
+<td><code>/api/beta/apply</code></td>
+<td><strong>登录用户</strong>（未登录 403）</td>
+</tr>
+<tr>
+<td>C-2 我的申请状态</td>
+<td>GET</td>
+<td><code>/api/beta/my-application</code></td>
+<td><strong>登录用户</strong>（未登录 403）</td>
+</tr>
+<tr>
+<td>公开计划列表</td>
+<td>GET</td>
+<td><code>/api/beta/plans</code></td>
+<td>匿名（<code>permitAll</code>）</td>
+</tr>
 </tbody>
 </table>
 <p>新增/改动文件：</p>
@@ -191,6 +212,14 @@ v3.3 Minecraft ID 同样只绑定一次 + 资格与白名单双向同步：
 ├── support/OnceBindingTest.java                 新增   8 项（两个字段共用规则 + 互不干扰）
 ├── OnceBindingEndToEndTest.java                 新增   5 项（真实 HTTP，两条接口都试）
 └── BetaWhitelistLifecycleTest.java              新增   4 项（真实 HTTP，资格 &lt;-&gt; 白名单同进同退）
+
+v3.5 内测申请必须登录平台账号：
+├── controller/BetaController.java               改动  新增 GET /my-application；/apply 注释写明身份来自账号
+├── service/BetaService.java                     改动  新增 getMyApplication；applyForBeta 补文档（身份取 user，不信请求体）
+├── service/BetaPlanService.java                 改动  新增 findPlan（查不到返回 null，供历史申请展示，不炸 500）
+├── dto/MyBetaApplicationDto.java                新增  本人申请状态（hasApplication / status / planName / betaStatus）
+├── dto/BetaApplyRequest.java                    改动  query 标注 @Deprecated（服务端已忽略，仅为兼容旧前端包）
+└── BetaApplyLoginGateTest.java                  新增   6 项（真实 HTTP，见 §5.6）
 </code></pre>
 <hr>
 <h2 id="2">2. ⚠️ 三条不能碰的红线</h2>
@@ -573,6 +602,67 @@ v3.2 只覆盖了 QQ，v3.3 把 Minecraft ID 纳入同一份规则——理由�
 <p>对账是给历史数据用的：v3.1 之前「已批准但没白名单」和「已取消但白名单还在」两种漂移
 都可能存在，靠 <code>POST /api/admin/beta/whitelist/sync-accounts</code> 一次修平，不必逐个人工核对。</p>
 <hr>
+<h3 id="56">5.6 申请内测必须登录，且身份只能是申请人自己</h3>
+<p>规则一句话：<strong>有开放中的计划 → 登录平台账号 → 才能提交申请</strong>。</p>
+<p>这条规则要在服务端落地，而不是只把前端按钮藏起来。两道闸门：</p>
+<table>
+<thead>
+<tr>
+<th>闸门</th>
+<th>位置</th>
+<th>表现</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>未登录不能申请</td>
+<td><code>SecurityConfig</code>：<code>/api/beta/apply</code> 与 <code>/api/beta/my-application</code> <strong>不在</strong> <code>permitAll</code> 名单里，落到 <code>anyRequest().authenticated()</code></td>
+<td>匿名请求 403，且<strong>不会</strong>在库里留下申请记录</td>
+</tr>
+<tr>
+<td>身份不能代填</td>
+<td><code>BetaService.applyForBeta</code></td>
+<td>用户名 / QQ / 游戏 ID 全部读 <code>users</code> 表（<code>userId</code> 取自 JWT），请求体里的 <code>query</code> 被忽略</td>
+</tr>
+</tbody>
+</table>
+<p>第二道闸门是关键：申请记录挂在 <code>users.id</code> 上，如果身份从请求体取，任何人都能拿别人的 QQ
+和游戏 ID 去占名额。现在 <code>app.setQq(user.getQq())</code> / <code>app.setMcId(user.getMcId())</code>，
+<code>BetaApplyRequest.query</code> 保留字段只是为了兼容仍在使用的旧前端包（已标 <code>@Deprecated</code>），
+新调用方不必传。</p>
+<p><strong>通知邮箱是唯一的例外</strong>：<code>app.setEmail(req.getEmail())</code> 仍取请求体，允许玩家把审核结果
+发到另一个地址；前端默认带出账号邮箱，玩家不改就直接用账号邮箱。</p>
+<p>配套的 <code>GET /api/beta/my-application</code> 解决「已申请的人看不见自己申请过」：</p>
+<table>
+<thead>
+<tr>
+<th>返回字段</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>hasApplication</code></td>
+<td><code>false</code> ⇒ 前端显示申请表单（全新账号就是这一态）</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td><code>pending</code> ⇒ 显示「审核中」状态卡；<code>denied</code> ⇒ 允许换计划重新申请</td>
+</tr>
+<tr>
+<td><code>planName</code> / <code>planPhase</code> / <code>createdAt</code> / <code>email</code></td>
+<td>「审核中」卡片上的回执信息</td>
+</tr>
+<tr>
+<td><code>betaStatus</code></td>
+<td>账号当下的资格，与 <code>status</code> 分开——管理员可以不给申请记录就直接发资格</td>
+</tr>
+</tbody>
+</table>
+<p><code>planName</code> 用 <code>BetaPlanService.findPlan</code>（查不到返回 <code>null</code>）而不是 <code>requirePlan</code>：
+计划的 id 是申请时的历史快照，运营把计划删掉之后玩家的申请还在，这时不能因为计划找不到
+就把整个查询接口炸成 500。</p>
+<hr>
 <h2 id="6">6. 自测</h2>
 <pre><code class="language-bash"># 全量测试（用 H2，不会连生产库）
 ./gradlew test
@@ -627,11 +717,20 @@ v3.2 只覆盖了 QQ，v3.3 把 Minecraft ID 纳入同一份规则——理由�
 <td>4</td>
 <td><strong>真实 HTTP</strong>：批准资格自动写入白名单且校验放行 → 取消资格后条目消失、校验被拒 → 重新批准条目回来；管理员纠正游戏 ID 后白名单跟着换、旧 ID 立即失效；人工条目在撤资格时不受影响；对账补缺失条目、清系统孤儿、保留人工条目</td>
 </tr>
+<tr>
+<td><code>BetaApplyLoginGateTest</code></td>
+<td>6</td>
+<td><strong>真实 HTTP</strong>：匿名申请被拒且不留记录、匿名读申请状态被拒、<strong>身份取自账号而非请求体</strong>（请求体里塞别人的 QQ 也只能给自己申请）、<code>my-application</code> 依次返回 none → pending → approved、审核期间重复申请 400、已有资格者不能再申请</td>
+</tr>
 </tbody>
 </table>
-<p><code>BetaVerifyEndToEndTest</code>、<code>BetaApprovalWhitelistSyncTest</code>、<code>OnceBindingEndToEndTest</code> 与
-<code>BetaWhitelistLifecycleTest</code> 会真的启动 Tomcat 并用 <code>HttpClient</code> 打请求，是最接近线上的验证。
-项目当前全量 <strong>70 项全绿</strong>。</p>
+<p><code>BetaVerifyEndToEndTest</code>、<code>BetaApprovalWhitelistSyncTest</code>、<code>OnceBindingEndToEndTest</code>、
+<code>BetaWhitelistLifecycleTest</code> 与 <code>BetaApplyLoginGateTest</code> 会真的启动 Tomcat 并用 <code>HttpClient</code>
+打请求，是最接近线上的验证。项目当前全量 <strong>76 项全绿</strong>。</p>
+<blockquote>
+<p>新增用例时注意：这些端到端测试共享同一个 Spring 上下文和同一个 H2 库，账号标识（QQ / 用户名）
+必须用<strong>互不冲突</strong>的号段，否则会互相踩到。</p>
+</blockquote>
 <h3 id="61">6.1 手工联调</h3>
 <pre><code class="language-bash">BASE=&quot;http://127.0.0.1:8080/api/beta/verify&quot;
 
@@ -655,6 +754,8 @@ curl -i &quot;$BASE?qq=123456789&quot;
 <li><span class="cb"></span>反代访问日志已对 <code>qq</code> 参数脱敏</li>
 <li><span class="cb"></span>接口用 HTTPS（客户端允许 http，但生产必须 https）</li>
 <li><span class="cb"></span>管理接口确认未暴露公网（已强制 <code>ROLE_ADMIN</code>，建议再加 IP 白名单）</li>
+<li><span class="cb"></span>确认 <code>/api/beta/apply</code> <strong>没有</strong>被误加进 <code>permitAll</code>（放行等于允许匿名占名额）</li>
+<li><span class="cb"></span>至少一个内测计划处于 <code>active</code> 且日期窗口覆盖当天，否则前端不会出现申请入口</li>
 <li><span class="cb"></span>隐私政策已说明采集 QQ 号的用途与保留期限</li>
 </ul>
 <hr>
