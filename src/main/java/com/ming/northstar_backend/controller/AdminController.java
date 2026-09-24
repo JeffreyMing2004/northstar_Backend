@@ -35,10 +35,43 @@ public class AdminController {
         return execute(() -> ApiResponse.ok("玩家资料已更新", adminService.updateUser(id, request)));
     }
 
+    @PostMapping("/users/{id}/admin")
+    public ResponseEntity<ApiResponse<UserDto>> grantAdmin(@PathVariable Long id) {
+        return execute(() -> ApiResponse.ok("管理员身份已授予", adminService.grantAdmin(id)));
+    }
+
+    @DeleteMapping("/users/{id}/admin")
+    public ResponseEntity<ApiResponse<UserDto>> revokeAdmin(@PathVariable Long id) {
+        return execute(() -> ApiResponse.ok("管理员身份已取消", adminService.revokeAdmin(id)));
+    }
+
     @GetMapping("/beta-applications")
     public ResponseEntity<ApiResponse<List<BetaApplicationDto>>> getBetaApplications(
             @RequestParam(required = false) String status) {
         return ResponseEntity.ok(ApiResponse.ok(adminService.listBetaApplications(status)));
+    }
+
+    @GetMapping("/beta-plans")
+    public ResponseEntity<ApiResponse<List<BetaPlanDto>>> getBetaPlans() {
+        return ResponseEntity.ok(ApiResponse.ok(adminService.listBetaPlans()));
+    }
+
+    @PostMapping("/beta-plans")
+    public ResponseEntity<ApiResponse<BetaPlanDto>> createBetaPlan(@RequestBody BetaPlanRequest request) {
+        return execute(() -> ApiResponse.ok("内测计划已创建", adminService.createBetaPlan(request)));
+    }
+
+    @PutMapping("/beta-plans/{id}")
+    public ResponseEntity<ApiResponse<BetaPlanDto>> updateBetaPlan(
+            @PathVariable Long id, @RequestBody BetaPlanRequest request) {
+        return execute(() -> ApiResponse.ok("内测计划已更新", adminService.updateBetaPlan(id, request)));
+    }
+
+    @PatchMapping("/beta-plans/{id}/status")
+    public ResponseEntity<ApiResponse<BetaPlanDto>> updateBetaPlanStatus(
+            @PathVariable Long id, @RequestBody AdminBetaPlanStatusRequest request) {
+        return execute(() -> ApiResponse.ok("内测计划状态已更新",
+            adminService.updateBetaPlanStatus(id, request.getStatus())));
     }
 
     @PostMapping("/beta-applications")
@@ -70,20 +103,6 @@ public class AdminController {
     @GetMapping("/rooms")
     public ResponseEntity<ApiResponse<List<RoomDto>>> getRooms() {
         return ResponseEntity.ok(ApiResponse.ok(adminService.listRooms()));
-    }
-
-    @PatchMapping("/rooms/{id}")
-    public ResponseEntity<ApiResponse<RoomDto>> updateRoom(
-            @PathVariable Long id, @RequestBody AdminRoomStatusRequest request) {
-        return execute(() -> ApiResponse.ok("房间状态已更新", adminService.updateRoomStatus(id, request)));
-    }
-
-    @DeleteMapping("/rooms/{id}")
-    public ResponseEntity<ApiResponse<Void>> deleteRoom(@PathVariable Long id) {
-        return execute(() -> {
-            adminService.deleteRoom(id);
-            return ApiResponse.ok("房间已删除", null);
-        });
     }
 
     @GetMapping("/matches")

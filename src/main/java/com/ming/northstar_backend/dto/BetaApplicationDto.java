@@ -7,6 +7,7 @@ import java.time.format.DateTimeFormatter;
 public class BetaApplicationDto {
     private Long id;
     private Long userId;
+    private Long planId;
     private String username;
     private String email;
     private String mcId;
@@ -20,6 +21,7 @@ public class BetaApplicationDto {
         BetaApplicationDto dto = new BetaApplicationDto();
         dto.id = application.getId();
         dto.userId = application.getUserId();
+        dto.planId = application.getPlanId();
         dto.username = application.getUsername();
         dto.email = application.getEmail();
         dto.mcId = application.getMcId();
@@ -35,6 +37,8 @@ public class BetaApplicationDto {
     public void setId(Long id) { this.id = id; }
     public Long getUserId() { return userId; }
     public void setUserId(Long userId) { this.userId = userId; }
+    public Long getPlanId() { return planId; }
+    public void setPlanId(Long planId) { this.planId = planId; }
     public String getUsername() { return username; }
     public void setUsername(String username) { this.username = username; }
     public String getEmail() { return email; }

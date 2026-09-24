@@ -14,7 +14,6 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Locale;
-import java.util.concurrent.TimeUnit;
 
 @Service
 public class MinecraftAvatarService {
@@ -61,7 +60,7 @@ public class MinecraftAvatarService {
         );
 
         try {
-            redis.opsForValue().set(cacheKey, mapper.writeValueAsString(avatar), CACHE_TTL_HOURS, TimeUnit.HOURS);
+            redis.opsForValue().set(cacheKey, mapper.writeValueAsString(avatar), Duration.ofHours(CACHE_TTL_HOURS));
         } catch (Exception ignored) {}
 
         return avatar;

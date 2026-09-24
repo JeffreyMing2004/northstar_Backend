@@ -4,6 +4,7 @@ import com.ming.northstar_backend.dto.BetaApplyRequest;
 import com.ming.northstar_backend.dto.BetaCheckResponse;
 import com.ming.northstar_backend.dto.AdminBetaGrantRequest;
 import com.ming.northstar_backend.entity.BetaApplication;
+import com.ming.northstar_backend.entity.BetaPlan;
 import com.ming.northstar_backend.entity.User;
 import com.ming.northstar_backend.repository.BetaApplicationRepository;
 import com.ming.northstar_backend.repository.UserRepository;
@@ -22,10 +23,13 @@ public class BetaService {
 
     private final UserRepository userRepo;
     private final BetaApplicationRepository betaRepo;
+    private final BetaPlanService betaPlanService;
 
-    public BetaService(UserRepository userRepo, BetaApplicationRepository betaRepo) {
+    public BetaService(UserRepository userRepo, BetaApplicationRepository betaRepo,
+                       BetaPlanService betaPlanService) {
         this.userRepo = userRepo;
         this.betaRepo = betaRepo;
+        this.betaPlanService = betaPlanService;
     }
 
     public BetaCheckResponse checkBeta(String query) {
@@ -44,7 +48,11 @@ public class BetaService {
         res.setUsername(user.getUsername());
         res.setBetaStatus(user.getBetaStatus());
 
-        if ("approved".equals(user.getBetaStatus())) fillApprovedDetails(res, user.getCreatedAt());
+        if ("approved".equals(user.getBetaStatus())) {
+            BetaApplication application = betaRepo
+                .findFirstByUserIdAndStatusOrderByCreatedAtDesc(user.getId(), "approved");
+            fillApprovedDetails(res, user.getCreatedAt(), application);
+        }
 
         return res;
     }
@@ -61,8 +69,10 @@ public class BetaService {
             throw new RuntimeException("你已拥有内测资格");
         }
 
+        BetaPlan plan = betaPlanService.requireOpenPlan(req.getPlanId());
         BetaApplication app = new BetaApplication();
         app.setUserId(userId);
+        app.setPlanId(plan.getId());
         app.setEmail(req.getEmail());
         app.setUsername(user.getUsername());
         app.setMcId(user.getMcId());
@@ -105,6 +115,7 @@ public class BetaService {
         if (!mcId.isBlank() && !mcId.matches("^[a-zA-Z0-9_]{3,16}$")) {
             throw new RuntimeException("Minecraft ID 格式无效");
         }
+        BetaPlan plan = betaPlanService.requireAssignablePlan(request.getPlanId());
 
         User user = resolveUser(email, username, mcId);
         if (user != null) {
@@ -115,6 +126,7 @@ public class BetaService {
                 .findFirstByUserIdAndStatusOrderByCreatedAtDesc(user.getId(), "pending");
             if (application == null) application = new BetaApplication();
             application.setUserId(user.getId());
+            application.setPlanId(plan.getId());
             application.setEmail(email);
             application.setUsername(user.getUsername());
             application.setMcId(user.getMcId());
@@ -138,6 +150,7 @@ public class BetaService {
 
         BetaApplication application = new BetaApplication();
         application.setUserId(null);
+        application.setPlanId(plan.getId());
         application.setEmail(email);
         application.setUsername(username);
         application.setMcId(mcId);
@@ -245,14 +258,18 @@ public class BetaService {
         BetaCheckResponse res = new BetaCheckResponse();
         res.setUsername(!Objects.toString(app.getUsername(), "").isBlank() ? app.getUsername() : app.getEmail());
         res.setBetaStatus("approved");
-        fillApprovedDetails(res, app.getCreatedAt());
+        fillApprovedDetails(res, app.getCreatedAt(), app);
         return res;
     }
 
-    private void fillApprovedDetails(BetaCheckResponse res, java.time.LocalDateTime date) {
-        res.setType("标准内测资格");
+    private void fillApprovedDetails(BetaCheckResponse res, java.time.LocalDateTime date,
+                                     BetaApplication application) {
+        BetaPlan plan = application == null ? null : betaPlanService.requirePlan(application.getPlanId());
+        res.setType(plan == null ? "标准内测资格" : plan.getName());
         res.setDate(date.format(DateTimeFormatter.ofPattern("yyyy-MM-dd")));
-        res.setExpire("2026-12-31");
-        res.setModes("全部竞技模式");
+        res.setExpire(plan == null || plan.getEndsOn() == null ? "长期有效" : plan.getEndsOn().toString());
+        res.setModes(plan == null || plan.getAllowedModes() == null || plan.getAllowedModes().isBlank()
+            ? "全部竞技模式"
+            : plan.getAllowedModes());
     }
 }

@@ -5,6 +5,7 @@ public class AdminBetaGrantRequest {
     private String username;
     private String mcId;
     private String reason;
+    private Long planId;
 
     public AdminBetaGrantRequest() {}
 
@@ -16,4 +17,6 @@ public class AdminBetaGrantRequest {
     public void setMcId(String mcId) { this.mcId = mcId; }
     public String getReason() { return reason; }
     public void setReason(String reason) { this.reason = reason; }
+    public Long getPlanId() { return planId; }
+    public void setPlanId(Long planId) { this.planId = planId; }
 }

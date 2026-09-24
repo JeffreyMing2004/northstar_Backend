@@ -5,8 +5,8 @@ import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.Random;
-import java.util.concurrent.TimeUnit;
 
 @Service
 public class EmailService {
@@ -41,8 +41,8 @@ public class EmailService {
             throw new RuntimeException("\u90ae\u4ef6\u53d1\u9001\u5931\u8d25: " + e.getMessage());
         }
 
-        redis.opsForValue().set(CODE_PREFIX + email, code, CODE_TTL, TimeUnit.MINUTES);
-        redis.opsForValue().set(cooldownKey, "1", 60, TimeUnit.SECONDS);
+        redis.opsForValue().set(CODE_PREFIX + email, code, Duration.ofMinutes(CODE_TTL));
+        redis.opsForValue().set(cooldownKey, "1", Duration.ofSeconds(60));
     }
 
     public boolean verifyCode(String email, String code) {

@@ -1,6 +1,7 @@
 package com.ming.northstar_backend.config;
 
 import com.ming.northstar_backend.security.JwtFilter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -21,9 +22,12 @@ import java.util.List;
 public class SecurityConfig {
 
     private final JwtFilter jwtFilter;
+    private final List<String> allowedOrigins;
 
-    public SecurityConfig(JwtFilter jwtFilter) {
+    public SecurityConfig(JwtFilter jwtFilter,
+                          @Value("${app.cors.allowed-origins}") List<String> allowedOrigins) {
         this.jwtFilter = jwtFilter;
+        this.allowedOrigins = allowedOrigins;
     }
 
     @Bean
@@ -41,8 +45,11 @@ public class SecurityConfig {
                 .requestMatchers("/api/minecraft/avatar/**").permitAll()
                 .requestMatchers("/api/rooms").permitAll()
                 .requestMatchers("/api/beta/check").permitAll()
+                .requestMatchers("/api/beta/verify").permitAll()
+                .requestMatchers("/api/beta/plans").permitAll()
                 .requestMatchers("/api/matches/recent").permitAll()
                 .requestMatchers("/api/platform/stats").permitAll()
+                .requestMatchers("/api/bridge/**").permitAll()
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated()
             )
@@ -58,8 +65,8 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfig() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(List.of("http://localhost:5173", "http://localhost:3000"));
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedOrigins(allowedOrigins);
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

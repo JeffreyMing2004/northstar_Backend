@@ -11,6 +11,7 @@ public class BetaApplication {
     private Long id;
 
     private Long userId;
+    private Long planId;
 
     @Column(length = 128)
     private String email;
@@ -35,6 +36,8 @@ public class BetaApplication {
     public void setId(Long id) { this.id = id; }
     public Long getUserId() { return userId; }
     public void setUserId(Long userId) { this.userId = userId; }
+    public Long getPlanId() { return planId; }
+    public void setPlanId(Long planId) { this.planId = planId; }
     public String getEmail() { return email; }
     public void setEmail(String email) { this.email = email; }
     public String getUsername() { return username; }

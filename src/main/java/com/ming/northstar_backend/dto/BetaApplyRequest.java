@@ -4,6 +4,7 @@ public class BetaApplyRequest {
     private String query;
     private String email;
     private String reason;
+    private Long planId;
 
     public BetaApplyRequest() {}
 
@@ -13,4 +14,6 @@ public class BetaApplyRequest {
     public void setEmail(String email) { this.email = email; }
     public String getReason() { return reason; }
     public void setReason(String reason) { this.reason = reason; }
+    public Long getPlanId() { return planId; }
+    public void setPlanId(Long planId) { this.planId = planId; }
 }

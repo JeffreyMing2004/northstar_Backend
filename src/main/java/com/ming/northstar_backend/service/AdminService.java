@@ -23,7 +23,6 @@ import java.util.stream.Collectors;
 public class AdminService {
 
     private static final Set<String> BETA_STATUSES = Set.of("none", "pending", "approved", "denied");
-    private static final Set<String> ROOM_STATUSES = Set.of("waiting", "playing", "closed");
 
     private final UserRepository userRepo;
     private final BetaApplicationRepository betaRepo;
@@ -32,11 +31,14 @@ public class AdminService {
     private final AdminAccessService adminAccessService;
     private final StatsService statsService;
     private final BetaService betaService;
+    private final BetaPlanService betaPlanService;
     private final EmailService emailService;
+    private final LiveServerStatsService serverStatsService;
 
     public AdminService(UserRepository userRepo, BetaApplicationRepository betaRepo, RoomRepository roomRepo,
                         MatchRecordRepository matchRepo, AdminAccessService adminAccessService,
-                        StatsService statsService, BetaService betaService, EmailService emailService) {
+                        StatsService statsService, BetaService betaService, EmailService emailService,
+                        BetaPlanService betaPlanService, LiveServerStatsService serverStatsService) {
         this.userRepo = userRepo;
         this.betaRepo = betaRepo;
         this.roomRepo = roomRepo;
@@ -44,7 +46,9 @@ public class AdminService {
         this.adminAccessService = adminAccessService;
         this.statsService = statsService;
         this.betaService = betaService;
+        this.betaPlanService = betaPlanService;
         this.emailService = emailService;
+        this.serverStatsService = serverStatsService;
     }
 
     public AdminOverview getOverview() {
@@ -52,9 +56,11 @@ public class AdminService {
         long totalUsers = userRepo.count();
         overview.setTotalUsers(totalUsers);
         overview.setPendingBetaApplications(betaRepo.countByStatus("pending"));
-        overview.setActiveRooms(roomRepo.countByStatusIn(List.of("waiting", "playing")));
+        overview.setActiveRooms(serverStatsService.getActiveRooms());
         overview.setTotalMatches(matchRepo.count());
-        overview.setOnlinePlayers(Math.max(1, totalUsers * 3 / 10));
+        overview.setOnlinePlayers(serverStatsService.getOnlinePlayers());
+        overview.setAdminCount(adminAccessService.getAdminCount());
+        overview.setMaxAdmins(adminAccessService.getMaxAdmins());
         return overview;
     }
 
@@ -67,7 +73,7 @@ public class AdminService {
                 || contains(user.getEmail(), keyword)
                 || contains(user.getMcId(), keyword))
             .filter(user -> status.isBlank() || status.equals(user.getBetaStatus()))
-            .map(user -> UserDto.from(user, adminAccessService.roleFor(user.getUsername())))
+            .map(user -> toUserDto(user))
             .collect(Collectors.toList());
     }
 
@@ -113,7 +119,23 @@ public class AdminService {
         user.setUpdatedAt(LocalDateTime.now());
         user = userRepo.save(user);
         statsService.invalidatePlayerCache(user.getUsername());
-        return UserDto.from(user, adminAccessService.roleFor(user.getUsername()));
+        return toUserDto(user);
+    }
+
+    @Transactional
+    public UserDto grantAdmin(Long userId) {
+        User user = userRepo.findById(userId)
+            .orElseThrow(() -> new RuntimeException("用户不存在"));
+        adminAccessService.grantAdmin(user.getUsername());
+        return toUserDto(user);
+    }
+
+    @Transactional
+    public UserDto revokeAdmin(Long userId) {
+        User user = userRepo.findById(userId)
+            .orElseThrow(() -> new RuntimeException("用户不存在"));
+        adminAccessService.revokeAdmin(user.getUsername());
+        return toUserDto(user);
     }
 
     public List<BetaApplicationDto> listBetaApplications(String status) {
@@ -122,6 +144,22 @@ public class AdminService {
             ? betaRepo.findAllByOrderByCreatedAtDesc()
             : betaRepo.findByStatusOrderByCreatedAtDesc(value);
         return applications.stream().map(BetaApplicationDto::from).collect(Collectors.toList());
+    }
+
+    public List<BetaPlanDto> listBetaPlans() {
+        return betaPlanService.listAdminPlans();
+    }
+
+    public BetaPlanDto createBetaPlan(BetaPlanRequest request) {
+        return betaPlanService.createPlan(request);
+    }
+
+    public BetaPlanDto updateBetaPlan(Long planId, BetaPlanRequest request) {
+        return betaPlanService.updatePlan(planId, request);
+    }
+
+    public BetaPlanDto updateBetaPlanStatus(Long planId, String status) {
+        return betaPlanService.updatePlanStatus(planId, status);
     }
 
     @Transactional
@@ -141,6 +179,9 @@ public class AdminService {
 
         BetaApplication application = betaRepo.findById(applicationId)
             .orElseThrow(() -> new RuntimeException("申请不存在"));
+        if ("approved".equals(status)) {
+            betaPlanService.assertApprovalAllowed(application.getPlanId());
+        }
         application.setStatus(status);
         application = betaRepo.save(application);
 
@@ -158,34 +199,12 @@ public class AdminService {
 
     public List<RoomDto> listRooms() {
         return roomRepo.findAllByOrderByCreatedAtDesc().stream()
+            .filter(room -> room.getServerId() != null && room.getExternalId() != null)
             .map(RoomDto::from)
             .collect(Collectors.toList());
     }
 
     @Transactional
-    public RoomDto updateRoomStatus(Long roomId, AdminRoomStatusRequest update) {
-        String status = update.getStatus() == null
-            ? ""
-            : update.getStatus().trim().toLowerCase(Locale.ROOT);
-        if (!ROOM_STATUSES.contains(status)) {
-            throw new RuntimeException("房间状态无效");
-        }
-        Room room = roomRepo.findById(roomId)
-            .orElseThrow(() -> new RuntimeException("房间不存在"));
-        room.setStatus(status);
-        if ("closed".equals(status)) {
-            room.setCurrentPlayers(0);
-        }
-        return RoomDto.from(roomRepo.save(room));
-    }
-
-    @Transactional
-    public void deleteRoom(Long roomId) {
-        Room room = roomRepo.findById(roomId)
-            .orElseThrow(() -> new RuntimeException("房间不存在"));
-        roomRepo.delete(room);
-    }
-
     public List<MatchDto> listRecentMatches() {
         List<MatchRecord> records = matchRepo.findTop50ByOrderByPlayedAtDesc();
         Map<Long, String> usernames = userRepo.findAll().stream()
@@ -197,6 +216,12 @@ public class AdminService {
 
     private boolean contains(String value, String keyword) {
         return value != null && value.toLowerCase(Locale.ROOT).contains(keyword);
+    }
+
+    private UserDto toUserDto(User user) {
+        UserDto dto = UserDto.from(user, adminAccessService.roleFor(user.getUsername()));
+        dto.setAdminLocked(adminAccessService.isConfiguredAdmin(user.getUsername()));
+        return dto;
     }
 
     private BetaManagementResponse sendBetaApproval(BetaApplication application) {

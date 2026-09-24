@@ -12,4 +12,6 @@ public interface BetaApplicationRepository extends JpaRepository<BetaApplication
     List<BetaApplication> findAllByOrderByCreatedAtDesc();
     List<BetaApplication> findByStatusOrderByCreatedAtDesc(String status);
     long countByStatus(String status);
+    long countByPlanIdAndStatus(Long planId, String status);
+    void deleteByUserId(Long userId);
 }
