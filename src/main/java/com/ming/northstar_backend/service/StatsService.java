@@ -10,8 +10,8 @@ import com.ming.northstar_backend.repository.UserRepository;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Service
@@ -69,7 +69,7 @@ public class StatsService {
                 .collect(Collectors.toList()));
 
         try {
-            redis.opsForValue().set(STATS_PREFIX + username, mapper.writeValueAsString(stats), CACHE_TTL, TimeUnit.SECONDS);
+            redis.opsForValue().set(STATS_PREFIX + username, mapper.writeValueAsString(stats), Duration.ofSeconds(CACHE_TTL));
         } catch (Exception ignored) {}
 
         return stats;
@@ -127,7 +127,7 @@ public class StatsService {
         }).collect(Collectors.toList());
 
         try {
-            redis.opsForValue().set(LB_KEY, mapper.writeValueAsString(entries), CACHE_TTL, TimeUnit.SECONDS);
+            redis.opsForValue().set(LB_KEY, mapper.writeValueAsString(entries), Duration.ofSeconds(CACHE_TTL));
         } catch (Exception ignored) {}
 
         return entries;
