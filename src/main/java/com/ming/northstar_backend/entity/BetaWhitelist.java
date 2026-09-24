@@ -34,6 +34,11 @@ public class BetaWhitelist {
     /** 状态：禁用。 */
     public static final int STATUS_DISABLED = 0;
 
+    /** 来源：运营在后台手工录入或导入。 */
+    public static final String SOURCE_MANUAL = "manual";
+    /** 来源：账号审批通过后由系统自动同步（见 {@code BetaWhitelistService#syncApprovedPlayer}）。 */
+    public static final String SOURCE_ACCOUNT = "account";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -68,6 +73,15 @@ public class BetaWhitelist {
     /** 操作人。 */
     @Column(length = 64)
     private String createdBy;
+
+    /**
+     * 条目来源：{@code manual}（人工）或 {@code account}（账号审批自动同步）。
+     *
+     * <p>系统同步时只重建自己创建的 {@code account} 条目，绝不覆盖人工记录；
+     * 历史数据该列为 null 时按 {@code manual} 处理。</p>
+     */
+    @Column(length = 16)
+    private String source = SOURCE_MANUAL;
 
     public BetaWhitelist() {
     }
@@ -111,4 +125,11 @@ public class BetaWhitelist {
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
     public String getCreatedBy() { return createdBy; }
     public void setCreatedBy(String createdBy) { this.createdBy = createdBy; }
+    public String getSource() { return source; }
+    public void setSource(String source) { this.source = source; }
+
+    /** 是否由账号审批自动同步而来（这类条目允许被系统重建）。 */
+    public boolean isSystemManaged() {
+        return SOURCE_ACCOUNT.equals(source);
+    }
 }

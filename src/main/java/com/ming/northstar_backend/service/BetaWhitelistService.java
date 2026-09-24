@@ -5,6 +5,7 @@ import com.ming.northstar_backend.entity.BetaVerifyLog;
 import com.ming.northstar_backend.entity.BetaWhitelist;
 import com.ming.northstar_backend.repository.BetaVerifyLogRepository;
 import com.ming.northstar_backend.repository.BetaWhitelistRepository;
+import com.ming.northstar_backend.support.QqFormat;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,6 +36,10 @@ import java.util.stream.Collectors;
  *   <li>若条目未绑定游戏 ID，则在 {@code northstar.verify.require-mc-id=false}（默认）时
  *       按任意游戏 ID 放行；置为 {@code true} 则一律判为未通过</li>
  * </ol>
+ *
+ * <p>白名单条目的来源分两类：运营在后台手工录入 / 导入的（{@code source=manual}），
+ * 以及账号审批通过后由 {@link #syncApprovedPlayer} 自动同步的（{@code source=account}）。
+ * 自动同步只重建自己创建的条目，不会覆盖人工记录。</p>
  */
 @Service
 public class BetaWhitelistService {
@@ -52,7 +57,7 @@ public class BetaWhitelistService {
 
     private final BetaWhitelistRepository whitelistRepo;
     private final BetaVerifyLogRepository logRepo;
-    private final Pattern qqPattern;
+    private final QqFormat qqFormat;
     private final int rateLimitPerMinute;
     /** 是否强制要求白名单条目已绑定游戏 ID。 */
     private final boolean requireGameId;
@@ -60,12 +65,12 @@ public class BetaWhitelistService {
 
     public BetaWhitelistService(BetaWhitelistRepository whitelistRepo,
                                 BetaVerifyLogRepository logRepo,
-                                @Value("${northstar.verify.qq-pattern:^[1-9]\\d{4,10}$}") String qqPattern,
+                                QqFormat qqFormat,
                                 @Value("${northstar.verify.rate-limit-per-minute:60}") int rateLimitPerMinute,
                                 @Value("${northstar.verify.require-mc-id:false}") boolean requireGameId) {
         this.whitelistRepo = whitelistRepo;
         this.logRepo = logRepo;
-        this.qqPattern = Pattern.compile(qqPattern);
+        this.qqFormat = qqFormat;
         this.rateLimitPerMinute = rateLimitPerMinute;
         this.requireGameId = requireGameId;
     }
@@ -89,7 +94,7 @@ public class BetaWhitelistService {
         String qq = rawQq == null ? "" : rawQq.trim();
         String name = truncate(playerName, 64);
 
-        if (!qqPattern.matcher(qq).matches()) {
+        if (!qqFormat.isValid(qq)) {
             BetaVerifyLog log = newLog(qq, name, ip, userAgent);
             saveLog(log, null, BetaVerifyLog.RESULT_ERROR, 400, startedAt, "QQ 号格式无效");
             return new VerifyOutcome(400, BetaVerifyResponse.badRequest("QQ 号格式无效"));
@@ -250,6 +255,7 @@ public class BetaWhitelistService {
         entry.setQq(qq);
         applyRequest(entry, request, true);
         requireNoDuplicate(qq, entry.getBoundGameId(), null);
+        entry.setSource(BetaWhitelist.SOURCE_MANUAL);
         entry.setCreatedBy(truncate(operator, 64));
         entry.setCreatedAt(LocalDateTime.now());
         entry.setUpdatedAt(LocalDateTime.now());
@@ -304,7 +310,7 @@ public class BetaWhitelistService {
                 result.setSkipped(result.getSkipped() + 1);
                 continue;
             }
-            if (!qqPattern.matcher(qq).matches()) {
+            if (!qqFormat.isValid(qq)) {
                 result.addError(line, qq, "QQ 号格式无效");
                 continue;
             }
@@ -347,7 +353,7 @@ public class BetaWhitelistService {
                 result.setSkipped(result.getSkipped() + 1);
                 continue;
             }
-            if (!qqPattern.matcher(qq).matches()) {
+            if (!qqFormat.isValid(qq)) {
                 result.addError(line, qq, "QQ 号格式无效");
                 continue;
             }
@@ -383,12 +389,14 @@ public class BetaWhitelistService {
             if (existing.isPresent()) {
                 BetaWhitelist entry = existing.get();
                 applyRequest(entry, item, true);
+                entry.setSource(BetaWhitelist.SOURCE_MANUAL);
                 entry.setUpdatedAt(LocalDateTime.now());
                 whitelistRepo.save(entry);
                 result.setUpdated(result.getUpdated() + 1);
                 return;
             }
 
+            probe.setSource(BetaWhitelist.SOURCE_MANUAL);
             probe.setCreatedBy(truncate(operator, 64));
             probe.setCreatedAt(LocalDateTime.now());
             probe.setUpdatedAt(LocalDateTime.now());
@@ -437,6 +445,95 @@ public class BetaWhitelistService {
                 .collect(Collectors.toList());
 
         return slice(all, page, size);
+    }
+
+    // ------------------------------------------------------------------
+    // 账号审批 -> 白名单同步
+    // ------------------------------------------------------------------
+
+    /** 同步结果类别。 */
+    public enum SyncOutcome {
+        /** 新建了白名单条目。 */
+        CREATED,
+        /** 已有完全相同的条目，未做改动（保留运营对状态 / 到期时间的修改）。 */
+        UNCHANGED,
+        /** 删掉旧的系统条目，按最新「QQ + 游戏ID」重建。 */
+        REFRESHED,
+        /** 账号缺少 QQ 号，无法同步。 */
+        MISSING_QQ,
+        /** QQ 号或游戏ID 格式非法，无法同步。 */
+        INVALID_FORMAT
+    }
+
+    /** 同步结果；失败时 {@code entry} 为 {@code null}。 */
+    public record SyncResult(SyncOutcome outcome, BetaWhitelist entry) {
+        public boolean succeeded() {
+            return outcome == SyncOutcome.CREATED
+                    || outcome == SyncOutcome.UNCHANGED
+                    || outcome == SyncOutcome.REFRESHED;
+        }
+    }
+
+    /**
+     * 把「已获批的内测玩家」同步成白名单条目。
+     *
+     * <p>注册平台在注册时就要求玩家提交 QQ 与离线服游戏 ID。审批通过后必须把它们落成
+     * 白名单，否则 {@link #verify} 会一律判「该 QQ 未获得内测资格」，玩家一进游戏就崩溃。
+     * 有了本方法，运营不必再手工维护白名单。</p>
+     *
+     * <p>幂等规则（只动自己创建的条目，绝不覆盖人工录入的记录）：</p>
+     * <ol>
+     *   <li>已存在完全相同的 {@code (qq, 游戏ID)} 条目 → 原样返回，不动启用状态与到期时间</li>
+     *   <li>否则删除该 QQ 下所有 {@code source=account} 的旧条目，按当前值重建一条
+     *       「启用、永不过期」的条目，避免玩家改了游戏ID 或 QQ 后留下旧的通行证</li>
+     * </ol>
+     *
+     * <p>本方法<b>不抛异常</b>：失败原因放在返回值里，由调用方决定是阻断审批还是仅告警。</p>
+     */
+    @Transactional
+    public SyncResult syncApprovedPlayer(String rawQq, String rawMcId, String nickname,
+                                         String remark, String operator) {
+        String qq = qqFormat.normalize(rawQq);
+        if (qq.isEmpty()) {
+            return new SyncResult(SyncOutcome.MISSING_QQ, null);
+        }
+        if (!qqFormat.isValid(qq)) {
+            return new SyncResult(SyncOutcome.INVALID_FORMAT, null);
+        }
+        String gameId = blankToNull(rawMcId);
+        if (gameId != null && !GAME_ID_PATTERN.matcher(gameId).matches()) {
+            return new SyncResult(SyncOutcome.INVALID_FORMAT, null);
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        List<BetaWhitelist> rows = whitelistRepo.findAllByQqOrderByCreatedAtAsc(qq);
+
+        // 1) 已经存在完全相同的授权 -> 保持原样
+        for (BetaWhitelist row : rows) {
+            if (sameGameId(row.getBoundGameId(), gameId)) {
+                return new SyncResult(SyncOutcome.UNCHANGED, row);
+            }
+        }
+
+        // 2) 清掉旧的系统条目后重建
+        List<BetaWhitelist> owned = rows.stream().filter(BetaWhitelist::isSystemManaged).toList();
+        boolean refreshed = !owned.isEmpty();
+        if (refreshed) {
+            whitelistRepo.deleteAll(owned);
+        }
+
+        BetaWhitelist entry = new BetaWhitelist();
+        entry.setQq(qq);
+        entry.setMcId(gameId);
+        entry.setNickname(truncate(blankToNull(nickname), 64));
+        entry.setRemark(truncate(blankToNull(remark), 255));
+        entry.setStatus(BetaWhitelist.STATUS_ENABLED);
+        entry.setSource(BetaWhitelist.SOURCE_ACCOUNT);
+        entry.setCreatedBy(truncate(operator, 64));
+        entry.setCreatedAt(now);
+        entry.setUpdatedAt(now);
+        return new SyncResult(refreshed ? SyncOutcome.REFRESHED : SyncOutcome.CREATED,
+                whitelistRepo.save(entry));
     }
 
     // ------------------------------------------------------------------
@@ -498,7 +595,7 @@ public class BetaWhitelistService {
 
     private String requireValidQq(String raw) {
         String qq = raw == null ? "" : raw.trim();
-        if (!qqPattern.matcher(qq).matches()) {
+        if (!qqFormat.isValid(qq)) {
             throw new RuntimeException("QQ 号格式无效");
         }
         return qq;

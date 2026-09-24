@@ -19,6 +19,14 @@ public class User {
     @Column(unique = true, length = 128)
     private String email;
 
+    /**
+     * 玩家 QQ 号。内测白名单以「QQ + 游戏ID」为键，注册时由玩家提交，
+     * 审批通过后由系统同步成白名单条目。
+     */
+    @Column(length = 16)
+    private String qq;
+
+    /** 玩家提交的离线服游戏 ID（Minecraft ID）。 */
     @Column(length = 64)
     private String mcId;
 
@@ -47,6 +55,8 @@ public class User {
     public void setPassword(String password) { this.password = password; }
     public String getEmail() { return email; }
     public void setEmail(String email) { this.email = email; }
+    public String getQq() { return qq; }
+    public void setQq(String qq) { this.qq = qq; }
     public String getMcId() { return mcId; }
     public void setMcId(String mcId) { this.mcId = mcId; }
     public String getRank() { return rank; }

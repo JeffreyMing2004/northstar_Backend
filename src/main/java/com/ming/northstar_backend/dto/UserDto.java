@@ -8,6 +8,7 @@ public class UserDto {
     private Long id;
     private String username;
     private String email;
+    private String qq;
     private String mcId;
     private String rank;
     private Integer score;
@@ -31,6 +32,7 @@ public class UserDto {
         dto.id = u.getId();
         dto.username = u.getUsername();
         dto.email = u.getEmail();
+        dto.qq = u.getQq();
         dto.mcId = u.getMcId();
         dto.rank = u.getRank();
         dto.score = u.getScore();
@@ -50,6 +52,8 @@ public class UserDto {
     public void setUsername(String username) { this.username = username; }
     public String getEmail() { return email; }
     public void setEmail(String email) { this.email = email; }
+    public String getQq() { return qq; }
+    public void setQq(String qq) { this.qq = qq; }
     public String getMcId() { return mcId; }
     public void setMcId(String mcId) { this.mcId = mcId; }
     public String getRank() { return rank; }

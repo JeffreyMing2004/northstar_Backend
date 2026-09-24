@@ -9,6 +9,7 @@ import com.ming.northstar_backend.repository.BetaApplicationRepository;
 import com.ming.northstar_backend.repository.MatchRecordRepository;
 import com.ming.northstar_backend.repository.RoomRepository;
 import com.ming.northstar_backend.repository.UserRepository;
+import com.ming.northstar_backend.support.QqFormat;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,11 +35,14 @@ public class AdminService {
     private final BetaPlanService betaPlanService;
     private final EmailService emailService;
     private final LiveServerStatsService serverStatsService;
+    private final BetaWhitelistService betaWhitelistService;
+    private final QqFormat qqFormat;
 
     public AdminService(UserRepository userRepo, BetaApplicationRepository betaRepo, RoomRepository roomRepo,
                         MatchRecordRepository matchRepo, AdminAccessService adminAccessService,
                         StatsService statsService, BetaService betaService, EmailService emailService,
-                        BetaPlanService betaPlanService, LiveServerStatsService serverStatsService) {
+                        BetaPlanService betaPlanService, LiveServerStatsService serverStatsService,
+                        BetaWhitelistService betaWhitelistService, QqFormat qqFormat) {
         this.userRepo = userRepo;
         this.betaRepo = betaRepo;
         this.roomRepo = roomRepo;
@@ -49,6 +53,8 @@ public class AdminService {
         this.betaPlanService = betaPlanService;
         this.emailService = emailService;
         this.serverStatsService = serverStatsService;
+        this.betaWhitelistService = betaWhitelistService;
+        this.qqFormat = qqFormat;
     }
 
     public AdminOverview getOverview() {
@@ -81,6 +87,7 @@ public class AdminService {
     public UserDto updateUser(Long userId, AdminUserUpdateRequest update) {
         User user = userRepo.findById(userId)
             .orElseThrow(() -> new RuntimeException("用户不存在"));
+        String previousBetaStatus = user.getBetaStatus();
 
         if (update.getRank() != null) {
             String rank = update.getRank().trim();
@@ -116,9 +123,24 @@ public class AdminService {
             }
             user.setMcId(mcId.isBlank() ? null : mcId);
         }
+        if (update.getQq() != null) {
+            String qq = update.getQq().trim();
+            if (!qq.isBlank() && !qqFormat.isValid(qq)) {
+                throw new RuntimeException("QQ 号格式无效");
+            }
+            user.setQq(qq.isBlank() ? null : qq);
+        }
         user.setUpdatedAt(LocalDateTime.now());
         user = userRepo.save(user);
         statsService.invalidatePlayerCache(user.getUsername());
+
+        // 已获批玩家的 QQ / 游戏ID 变了，白名单必须跟着走，否则玩家会被判未通过
+        boolean whitelistRelevant = !"approved".equals(previousBetaStatus)
+            || update.getQq() != null
+            || update.getMcId() != null;
+        if ("approved".equals(user.getBetaStatus()) && whitelistRelevant) {
+            requireWhitelistSync(user.getQq(), user.getMcId(), user.getUsername(), "管理员修改账号");
+        }
         return toUserDto(user);
     }
 
@@ -192,9 +214,49 @@ public class AdminService {
                 userRepo.save(user);
             });
         }
-        return "approved".equals(status)
-            ? sendBetaApproval(application)
-            : new BetaManagementResponse(BetaApplicationDto.from(application), false);
+        if ("approved".equals(status)) {
+            // 审批即授权：白名单同步失败就让审批失败，避免「后台已批准但玩家进不去」
+            requireWhitelistApplicationSync(application);
+            return sendBetaApproval(application);
+        }
+        return new BetaManagementResponse(BetaApplicationDto.from(application), false);
+    }
+
+    /**
+     * 审批通过后把「QQ + 游戏ID」同步进白名单。
+     *
+     * <p>QQ 与游戏ID 优先取账号上玩家自己提交的值（注册平台要求填），
+     * 账号不存在或未填时回退到申请记录上的值。</p>
+     */
+    private void requireWhitelistApplicationSync(BetaApplication application) {
+        User user = application.getUserId() == null
+            ? null
+            : userRepo.findById(application.getUserId()).orElse(null);
+        String qq = user != null && user.getQq() != null ? user.getQq() : application.getQq();
+        String mcId = user != null && user.getMcId() != null ? user.getMcId() : application.getMcId();
+        String nickname = user != null ? user.getUsername() : application.getUsername();
+
+        BetaWhitelistService.SyncResult result = betaWhitelistService.syncApprovedPlayer(
+            qq, mcId, nickname, "内测审批自动同步", "system:beta-approval");
+        if (result.outcome() == BetaWhitelistService.SyncOutcome.MISSING_QQ) {
+            throw new RuntimeException("该申请人尚未填写 QQ 号，无法加入内测白名单；"
+                + "请先让玩家在账号上补充 QQ，或到白名单页手工添加");
+        }
+        if (!result.succeeded()) {
+            throw new RuntimeException("QQ 号或游戏ID 格式非法，无法加入内测白名单");
+        }
+    }
+
+    /** 人工操作里的白名单同步：失败必须让整个操作失败。 */
+    private void requireWhitelistSync(String qq, String mcId, String nickname, String reason) {
+        BetaWhitelistService.SyncResult result = betaWhitelistService.syncApprovedPlayer(
+            qq, mcId, nickname, "内测审批自动同步（" + reason + "）", "system:beta-approval");
+        if (result.outcome() == BetaWhitelistService.SyncOutcome.MISSING_QQ) {
+            throw new RuntimeException("该玩家尚未填写 QQ 号，无法加入内测白名单；请先在账号上补充 QQ");
+        }
+        if (!result.succeeded()) {
+            throw new RuntimeException("QQ 号或游戏ID 格式非法，无法加入内测白名单");
+        }
     }
 
     public List<RoomDto> listRooms() {

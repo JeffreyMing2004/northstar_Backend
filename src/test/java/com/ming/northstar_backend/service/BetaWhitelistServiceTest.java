@@ -5,6 +5,7 @@ import com.ming.northstar_backend.entity.BetaVerifyLog;
 import com.ming.northstar_backend.entity.BetaWhitelist;
 import com.ming.northstar_backend.repository.BetaVerifyLogRepository;
 import com.ming.northstar_backend.repository.BetaWhitelistRepository;
+import com.ming.northstar_backend.support.QqFormat;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -15,6 +16,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
@@ -41,7 +43,7 @@ class BetaWhitelistServiceTest {
     void setUp() {
         whitelistRepo = mock(BetaWhitelistRepository.class);
         logRepo = mock(BetaVerifyLogRepository.class);
-        service = new BetaWhitelistService(whitelistRepo, logRepo, QQ_PATTERN, 60, false);
+        service = new BetaWhitelistService(whitelistRepo, logRepo, new QqFormat(QQ_PATTERN), 60, false);
     }
 
     // ---------------- 接口 A：身份判定（QQ + 游戏ID） ----------------
@@ -103,7 +105,7 @@ class BetaWhitelistServiceTest {
 
     @Test
     void rejectsUnboundQqWhenRequireGameIdIsEnabled() {
-        BetaWhitelistService strict = new BetaWhitelistService(whitelistRepo, logRepo, QQ_PATTERN, 60, true);
+        BetaWhitelistService strict = new BetaWhitelistService(whitelistRepo, logRepo, new QqFormat(QQ_PATTERN), 60, true);
         stubQq("123456789", entry("123456789", null, 1, null));
 
         BetaWhitelistService.VerifyOutcome outcome = strict.verify("123456789", "Steve", "1.2.3.4", "UA");
@@ -216,7 +218,7 @@ class BetaWhitelistServiceTest {
 
     @Test
     void rateLimitsPerIp() {
-        BetaWhitelistService limited = new BetaWhitelistService(whitelistRepo, logRepo, QQ_PATTERN, 2, false);
+        BetaWhitelistService limited = new BetaWhitelistService(whitelistRepo, logRepo, new QqFormat(QQ_PATTERN), 2, false);
         stubQq("123456789", entry("123456789", "Steve", 1, null));
 
         assertEquals(200, limited.verify("123456789", "Steve", "9.9.9.9", "UA").httpStatus());
@@ -460,6 +462,105 @@ class BetaWhitelistServiceTest {
         assertEquals(1, service.listLogs(1, 20, "123456789", "reject", true).getTotal());
         assertEquals(1, service.listLogs(1, 20, "steve", "reject", true).getTotal(), "应能按游戏ID 过滤");
         assertEquals(0, service.listLogs(1, 20, null, "pass", true).getTotal());
+    }
+
+    // ---------------- 审批 -> 白名单同步 ----------------
+
+    @Test
+    void syncCreatesWhitelistEntryForApprovedPlayer() {
+        stubQq("123456789");
+        when(whitelistRepo.save(any(BetaWhitelist.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        BetaWhitelistService.SyncResult result = service.syncApprovedPlayer(
+                "123456789", "Steve", "明明", "内测审批自动同步", "system:beta-approval");
+
+        assertEquals(BetaWhitelistService.SyncOutcome.CREATED, result.outcome());
+        assertTrue(result.succeeded());
+        assertEquals("123456789", result.entry().getQq());
+        assertEquals("Steve", result.entry().getMcId());
+        assertEquals(BetaWhitelist.STATUS_ENABLED, result.entry().getStatus(), "自动同步的条目必须可以直接用");
+        assertEquals(BetaWhitelist.SOURCE_ACCOUNT, result.entry().getSource());
+        assertEquals("明明", result.entry().getNickname());
+    }
+
+    @Test
+    void syncIsIdempotentAndKeepsOperatorEdits() {
+        // 运营已经把这条自动同步的条目禁用了；再次审批不能把它悄悄重新启用
+        BetaWhitelist existing = entry("123456789", "Steve", 0, null);
+        existing.setSource(BetaWhitelist.SOURCE_ACCOUNT);
+        existing.setExpireAt(LocalDateTime.now().plusDays(3));
+        stubQq("123456789", existing);
+
+        BetaWhitelistService.SyncResult result = service.syncApprovedPlayer(
+                "123456789", "Steve", "明明", null, "system:beta-approval");
+
+        assertEquals(BetaWhitelistService.SyncOutcome.UNCHANGED, result.outcome());
+        assertEquals(BetaWhitelist.STATUS_DISABLED, result.entry().getStatus(), "不能覆盖运营的禁用");
+        verify(whitelistRepo, never()).save(any(BetaWhitelist.class));
+        verify(whitelistRepo, never()).deleteAll(anyList());
+    }
+
+    @Test
+    void syncRebuildsEntryWhenGameIdChanged() {
+        BetaWhitelist old = entry("123456789", "Steve", 1, null);
+        old.setSource(BetaWhitelist.SOURCE_ACCOUNT);
+        stubQq("123456789", old);
+        when(whitelistRepo.save(any(BetaWhitelist.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        BetaWhitelistService.SyncResult result = service.syncApprovedPlayer(
+                "123456789", "Alex", "明明", null, "system:beta-approval");
+
+        assertEquals(BetaWhitelistService.SyncOutcome.REFRESHED, result.outcome());
+        assertEquals("Alex", result.entry().getMcId());
+        verify(whitelistRepo).deleteAll(anyList());
+    }
+
+    @Test
+    void syncNeverDeletesManualEntries() {
+        // 运营手工录入的条目（绑定 Steve）不能被系统同步当成自己的记录删掉
+        BetaWhitelist manual = entry("123456789", "Steve", 1, null);
+        manual.setSource(BetaWhitelist.SOURCE_MANUAL);
+        stubQq("123456789", manual);
+        when(whitelistRepo.save(any(BetaWhitelist.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        BetaWhitelistService.SyncResult result = service.syncApprovedPlayer(
+                "123456789", "Alex", "明明", null, "system:beta-approval");
+
+        assertEquals(BetaWhitelistService.SyncOutcome.CREATED, result.outcome(), "没有旧的系统条目，属于新建");
+        verify(whitelistRepo, never()).deleteAll(anyList());
+    }
+
+    @Test
+    void syncRefusesPlayersWithoutQq() {
+        BetaWhitelistService.SyncResult result = service.syncApprovedPlayer(
+                "   ", "Steve", "明明", null, "system");
+
+        assertEquals(BetaWhitelistService.SyncOutcome.MISSING_QQ, result.outcome());
+        assertFalse(result.succeeded());
+        verify(whitelistRepo, never()).save(any(BetaWhitelist.class));
+    }
+
+    @Test
+    void syncRefusesMalformedQqOrGameId() {
+        assertEquals(BetaWhitelistService.SyncOutcome.INVALID_FORMAT,
+                service.syncApprovedPlayer("abc", "Steve", null, null, "system").outcome());
+        assertEquals(BetaWhitelistService.SyncOutcome.INVALID_FORMAT,
+                service.syncApprovedPlayer("123456789", "小明", null, null, "system").outcome(),
+                "游戏ID 含中文必须拒绝，否则会写进一条永远匹配不上的绑定");
+
+        verify(whitelistRepo, never()).save(any(BetaWhitelist.class));
+    }
+
+    @Test
+    void syncStoresUnboundEntryWhenPlayerHasNoGameId() {
+        stubQq("123456789");
+        when(whitelistRepo.save(any(BetaWhitelist.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        BetaWhitelistService.SyncResult result = service.syncApprovedPlayer(
+                "123456789", "  ", "明明", null, "system");
+
+        assertEquals(BetaWhitelistService.SyncOutcome.CREATED, result.outcome());
+        assertNull(result.entry().getMcId(), "玩家没提交游戏ID 时应落成「不限定游戏ID」");
     }
 
     // ---------------- 辅助 ----------------

@@ -8,6 +8,9 @@ import com.ming.northstar_backend.entity.BetaPlan;
 import com.ming.northstar_backend.entity.User;
 import com.ming.northstar_backend.repository.BetaApplicationRepository;
 import com.ming.northstar_backend.repository.UserRepository;
+import com.ming.northstar_backend.support.QqFormat;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -21,15 +24,22 @@ import java.time.format.DateTimeFormatter;
 @Service
 public class BetaService {
 
+    private static final Logger log = LoggerFactory.getLogger(BetaService.class);
+
     private final UserRepository userRepo;
     private final BetaApplicationRepository betaRepo;
     private final BetaPlanService betaPlanService;
+    private final QqFormat qqFormat;
+    private final BetaWhitelistService betaWhitelistService;
 
     public BetaService(UserRepository userRepo, BetaApplicationRepository betaRepo,
-                       BetaPlanService betaPlanService) {
+                       BetaPlanService betaPlanService, QqFormat qqFormat,
+                       BetaWhitelistService betaWhitelistService) {
         this.userRepo = userRepo;
         this.betaRepo = betaRepo;
         this.betaPlanService = betaPlanService;
+        this.qqFormat = qqFormat;
+        this.betaWhitelistService = betaWhitelistService;
     }
 
     public BetaCheckResponse checkBeta(String query) {
@@ -75,6 +85,7 @@ public class BetaService {
         app.setPlanId(plan.getId());
         app.setEmail(req.getEmail());
         app.setUsername(user.getUsername());
+        app.setQq(user.getQq());
         app.setMcId(user.getMcId());
         app.setReason(req.getReason());
         betaRepo.save(app);
@@ -90,11 +101,15 @@ public class BetaService {
         candidate.setUserId(user.getId());
         candidate.setEmail(user.getEmail());
         candidate.setUsername(user.getUsername());
+        candidate.setQq(user.getQq());
         candidate.setMcId(user.getMcId());
         betaRepo.save(candidate);
 
         user.setBetaStatus("approved");
-        return userRepo.save(user);
+        User saved = userRepo.save(user);
+        // 认领资格是玩家触发的自动流程：缺 QQ 只告警，不能因此把他的注册/改绑打断
+        syncWhitelistQuietly(saved, "认领内测资格");
+        return saved;
     }
 
     @Transactional
@@ -102,6 +117,7 @@ public class BetaService {
         String email = normalize(request == null ? null : request.getEmail());
         String username = normalize(request == null ? null : request.getUsername());
         String mcId = normalize(request == null ? null : request.getMcId());
+        String qq = qqFormat.require(request == null ? null : request.getQq(), "QQ 号");
         String requestedReason = normalize(request == null ? null : request.getReason());
         String reason = (requestedReason.isBlank() ? "manual" : requestedReason).toLowerCase(Locale.ROOT);
 
@@ -129,14 +145,17 @@ public class BetaService {
             application.setPlanId(plan.getId());
             application.setEmail(email);
             application.setUsername(user.getUsername());
+            application.setQq(qq.isBlank() ? user.getQq() : qq);
             application.setMcId(user.getMcId());
             application.setReason(reason);
             application.setStatus("approved");
             application = betaRepo.save(application);
 
+            user.setQq(application.getQq());
             user.setBetaStatus("approved");
             user.setUpdatedAt(java.time.LocalDateTime.now());
             userRepo.save(user);
+            requireWhitelistSync(application.getQq(), user.getMcId(), user.getUsername(), "后台发放");
             return application;
         }
 
@@ -153,10 +172,47 @@ public class BetaService {
         application.setPlanId(plan.getId());
         application.setEmail(email);
         application.setUsername(username);
+        application.setQq(qq.isBlank() ? null : qq);
         application.setMcId(mcId);
         application.setReason(reason);
         application.setStatus("approved");
-        return betaRepo.save(application);
+        application = betaRepo.save(application);
+        // 该玩家还没注册账号，只能按管理员填的 QQ + 游戏ID 先发资格
+        requireWhitelistSync(application.getQq(), mcId, username, "后台发放");
+        return application;
+    }
+
+    /**
+     * 自动流程里的白名单同步：失败只记录日志，不影响主流程。
+     *
+     * <p>没有 QQ 时同步必然失败，这里不阻断玩家注册/改绑，但要留下明确的告警，
+     * 否则会出现「后台显示已批准、玩家进游戏却被判未通过而崩溃」这种难查的问题。</p>
+     */
+    private boolean syncWhitelistQuietly(User user, String reason) {
+        BetaWhitelistService.SyncResult result = betaWhitelistService.syncApprovedPlayer(
+            user.getQq(), user.getMcId(), user.getUsername(),
+            "内测审批自动同步（" + reason + "）", "system:beta-approval");
+        if (!result.succeeded()) {
+            log.warn("[NorthStar] 玩家 {} 已获批但白名单未同步（{}）：需补填 QQ 号，否则进游戏会被判未通过",
+                user.getUsername(), result.outcome());
+        }
+        return result.succeeded();
+    }
+
+    /**
+     * 人工操作（后台发放 / 审核通过）里的白名单同步：失败必须让整个操作失败。
+     *
+     * <p>宁可审批报错，也不能出现「后台显示已批准、玩家进游戏却被判未通过而崩溃」。</p>
+     */
+    private void requireWhitelistSync(String qq, String mcId, String nickname, String reason) {
+        BetaWhitelistService.SyncResult result = betaWhitelistService.syncApprovedPlayer(
+            qq, mcId, nickname, "内测审批自动同步（" + reason + "）", "system:beta-approval");
+        if (result.outcome() == BetaWhitelistService.SyncOutcome.MISSING_QQ) {
+            throw new RuntimeException("该玩家尚未填写 QQ 号，无法加入内测白名单；请先在账号上补充 QQ");
+        }
+        if (!result.succeeded()) {
+            throw new RuntimeException("QQ 号或游戏ID 格式非法，无法加入内测白名单");
+        }
     }
 
     private User resolveUser(String email, String username, String mcId) {

@@ -1,6 +1,7 @@
 package com.ming.northstar_backend.dto;
 
 public class AdminUserUpdateRequest {
+    private String qq;
     private String mcId;
     private String rank;
     private Integer score;
@@ -8,6 +9,8 @@ public class AdminUserUpdateRequest {
 
     public AdminUserUpdateRequest() {}
 
+    public String getQq() { return qq; }
+    public void setQq(String qq) { this.qq = qq; }
     public String getMcId() { return mcId; }
     public void setMcId(String mcId) { this.mcId = mcId; }
     public String getRank() { return rank; }

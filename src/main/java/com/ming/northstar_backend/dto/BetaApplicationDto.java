@@ -10,6 +10,7 @@ public class BetaApplicationDto {
     private Long planId;
     private String username;
     private String email;
+    private String qq;
     private String mcId;
     private String reason;
     private String status;
@@ -24,6 +25,7 @@ public class BetaApplicationDto {
         dto.planId = application.getPlanId();
         dto.username = application.getUsername();
         dto.email = application.getEmail();
+        dto.qq = application.getQq();
         dto.mcId = application.getMcId();
         dto.reason = application.getReason();
         dto.status = application.getStatus();
@@ -43,6 +45,8 @@ public class BetaApplicationDto {
     public void setUsername(String username) { this.username = username; }
     public String getEmail() { return email; }
     public void setEmail(String email) { this.email = email; }
+    public String getQq() { return qq; }
+    public void setQq(String qq) { this.qq = qq; }
     public String getMcId() { return mcId; }
     public void setMcId(String mcId) { this.mcId = mcId; }
     public String getReason() { return reason; }

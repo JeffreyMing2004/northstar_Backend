@@ -19,6 +19,10 @@ public class BetaApplication {
     @Column(length = 32)
     private String username;
 
+    /** 申请人的 QQ 号（账号注册时提交，后台发放时可由管理员指定）。 */
+    @Column(length = 16)
+    private String qq;
+
     @Column(length = 64)
     private String mcId;
 
@@ -42,6 +46,8 @@ public class BetaApplication {
     public void setEmail(String email) { this.email = email; }
     public String getUsername() { return username; }
     public void setUsername(String username) { this.username = username; }
+    public String getQq() { return qq; }
+    public void setQq(String qq) { this.qq = qq; }
     public String getMcId() { return mcId; }
     public void setMcId(String mcId) { this.mcId = mcId; }
     public String getReason() { return reason; }

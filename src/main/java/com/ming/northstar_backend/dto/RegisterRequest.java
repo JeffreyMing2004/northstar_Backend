@@ -5,6 +5,8 @@ public class RegisterRequest {
     private String password;
     private String email;
     private String emailCode;
+    /** 玩家 QQ 号，内测资格校验的键之一。 */
+    private String qq;
     private String mcId;
 
     public RegisterRequest() {}
@@ -17,6 +19,8 @@ public class RegisterRequest {
     public void setEmail(String email) { this.email = email; }
     public String getEmailCode() { return emailCode; }
     public void setEmailCode(String emailCode) { this.emailCode = emailCode; }
+    public String getQq() { return qq; }
+    public void setQq(String qq) { this.qq = qq; }
     public String getMcId() { return mcId; }
     public void setMcId(String mcId) { this.mcId = mcId; }
 }

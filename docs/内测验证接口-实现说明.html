@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>内测验证接口 - 实现说明 v3.0</title>
+<title>内测验证接口 — 实现说明 v3.1</title>
 <style>
 :root{--bd:#e3e6ea;--tx:#1f2328;--tx2:#57606a;--bg:#fff;--soft:#f6f8fa;--acc:#185FA5;}
 *{box-sizing:border-box}
@@ -44,6 +44,9 @@ li{margin:5px 0;}
 <p><strong>v3.0 核心变化</strong>：北极战区是<strong>离线模式</strong>服务器，玩家 UUID 由各启动器自行生成、
 每次启动都可能不同，<strong>不能作为身份依据</strong>。因此身份判定改为
 <strong>QQ + 游戏ID（<code>mcId</code>）</strong>，<code>uuid</code> 参数已从接口中移除。</p>
+<p><strong>v3.1 补充</strong>：服务端<strong>不启用 MC 白名单</strong>，判定完全在后端做。为了让「审批通过」真的能放行，
+注册平台新增 QQ 字段（<code>POST /api/auth/register</code> 的 <code>qq</code>），内测审批通过时后端会
+<strong>自动把该玩家的「QQ + 离线服游戏 ID」同步成白名单条目</strong>，运营不必再手工维护。详见 §5.3。</p>
 </blockquote>
 <hr>
 <h2 id="1">1. 这次加了什么</h2>
@@ -132,12 +135,29 @@ li{margin:5px 0;}
 ├── controller/AdminBetaWhitelistController.java 新增  接口 B
 └── config/SecurityConfig.java                   改动  /api/beta/verify 放行
 
+v3.1 打通「注册平台 -&gt; 审批 -&gt; 白名单」：
+├── support/QqFormat.java                        新增  QQ 格式的唯一判定入口
+├── entity/User.java                             改动  新增 qq（注册时由玩家提交）
+├── entity/BetaApplication.java                  改动  新增 qq（申请 / 发放时留存）
+├── entity/BetaWhitelist.java                    改动  新增 source（manual / account）
+├── service/BetaWhitelistService.java            改动  新增 syncApprovedPlayer（幂等同步）
+├── service/AuthService.java                     改动  注册 / 改资料时收集 QQ
+├── service/BetaService.java                     改动  发放 / 认领资格后同步白名单
+├── service/AdminService.java                    改动  审核 / 改账号后同步白名单
+├── dto/RegisterRequest.java                     改动  新增 qq
+├── dto/UserDto.java                             改动  暴露 qq（可用于补填）
+├── dto/AdminUserUpdateRequest.java              改动  新增 qq（管理员补填）
+├── dto/AdminBetaGrantRequest.java               改动  新增 qq（后台发放给未注册玩家）
+├── dto/BetaApplicationDto.java                  改动  新增 qq
+└── repository 层                                 无改动
+
 src/main/resources/application.properties        改动  新增 northstar.verify.* 三项配置
 
 src/test/java/com/ming/northstar_backend/
-├── service/BetaWhitelistServiceTest.java        新增  27 项
+├── service/BetaWhitelistServiceTest.java        新增  34 项
 ├── controller/BetaVerifyContractTest.java       新增   6 项（JSON 序列化契约）
-└── BetaVerifyEndToEndTest.java                  新增   4 项（真实 HTTP）
+├── BetaVerifyEndToEndTest.java                  新增   4 项（真实 HTTP）
+└── BetaApprovalWhitelistSyncTest.java           新增   3 项（审批同步 -&gt; 校验放行，真实 HTTP）
 </code></pre>
 <hr>
 <h2 id="2">2. ⚠️ 三条不能碰的红线</h2>
@@ -356,6 +376,78 @@ ALTER TABLE northstar_verify_log     DROP COLUMN player_uuid;
 <code>DROP TABLE northstar_beta_whitelist; DROP TABLE northstar_verify_log;</code>
 让服务重建即可（白名单本来也要重新导入）。</p>
 </blockquote>
+<h3 id="53">5.3 白名单条目从哪来：审批自动同步</h3>
+<p>服务端<strong>不启用 MC 白名单，也不校验 UUID</strong>，判定完全在后端完成。因此「内测审批通过」必须落到
+白名单表，否则玩家会被判「未通过」而客户端崩溃——这正是 v3.1 之前的结构性问题：
+白名单是运营手工维护的孤岛，与注册 / 审批数据零联动，玩家在平台注册、被批准、进游戏照样崩溃。</p>
+<p>v3.1 起来源由 <code>source</code> 列区分：</p>
+<table>
+<thead>
+<tr>
+<th><code>source</code></th>
+<th>来源</th>
+<th>谁维护</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>account</code></td>
+<td>注册平台提交的 QQ + 离线服游戏 ID，审批通过后由 <code>BetaWhitelistService.syncApprovedPlayer</code> 写入</td>
+<td>系统，重新审批会按最新值重建</td>
+</tr>
+<tr>
+<td><code>manual</code></td>
+<td>后台手工新增 / 批量导入</td>
+<td>运营（历史数据该列为 NULL，按 <code>manual</code> 处理）</td>
+</tr>
+</tbody>
+</table>
+<p>同步的幂等规则：</p>
+<ol>
+<li>已存在完全相同的 <code>(qq, mcId)</code> 条目 → <strong>不动</strong>，连运营改过的启用状态与到期时间都保留</li>
+<li>否则删除该 QQ 下所有 <code>source=account</code> 的旧条目，按当前值重建一条「启用、永不过期」的条目
+   ——这样玩家改了游戏ID 或 QQ 之后不会留下旧的通行证</li>
+<li><code>manual</code> 条目<strong>永不</strong>被系统删除</li>
+</ol>
+<p>触发点共四处：</p>
+<table>
+<thead>
+<tr>
+<th>触发</th>
+<th>位置</th>
+<th>同步失败时的行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>审核申请通过</td>
+<td><code>AdminService.decideBetaApplication</code></td>
+<td><strong>抛错让审批回滚</strong></td>
+</tr>
+<tr>
+<td>后台直接发放</td>
+<td><code>BetaService.grantBetaAccess</code></td>
+<td><strong>抛错</strong></td>
+</tr>
+<tr>
+<td>管理员改账号（QQ / 游戏ID / 内测状态）</td>
+<td><code>AdminService.updateUser</code></td>
+<td><strong>抛错</strong></td>
+</tr>
+<tr>
+<td>注册 / 改绑时认领已有资格</td>
+<td><code>BetaService.claimApprovedEligibility</code></td>
+<td>只记 WARN 日志，不打断玩家注册</td>
+</tr>
+</tbody>
+</table>
+<p>失败分两类：<code>MISSING_QQ</code>（账号没填 QQ）与 <code>INVALID_FORMAT</code>（QQ 或游戏ID 格式非法）。
+<strong>账号必须先有 QQ 才能获批</strong>——QQ 缺失时审批会被拒绝并提示先去补填，宁可审批失败，
+也不留下「后台显示已批准、玩家进游戏却被判未通过而崩溃」这种难查的状态。</p>
+<p>QQ 的来源：注册平台在注册时要求填（<code>RegisterRequest.qq</code> → <code>users.qq</code>）；
+存量账号可由管理员在「编辑玩家」弹窗补填，或玩家自己调 <code>PUT /api/auth/profile</code>。
+格式判定统一走 <code>support/QqFormat</code>（配置项 <code>northstar.verify.qq-pattern</code>），
+避免出现「注册能过、白名单导入却报错」这类不一致。</p>
 <hr>
 <h2 id="6">6. 自测</h2>
 <pre><code class="language-bash"># 全量测试（用 H2，不会连生产库）
@@ -378,8 +470,8 @@ ALTER TABLE northstar_verify_log     DROP COLUMN player_uuid;
 <tbody>
 <tr>
 <td><code>BetaWhitelistServiceTest</code></td>
-<td>27</td>
-<td>游戏ID 命中/不匹配/忽略大小写/未绑定放行/严格模式/多绑定择一、禁用、过期、<code>qq</code>/<code>name</code> 缺失、DB 异常、限流、CRUD、组合唯一性、导入导出、日志脱敏与 <code>matchedBy</code></td>
+<td>34</td>
+<td>游戏ID 命中/不匹配/忽略大小写/未绑定放行/严格模式/多绑定择一、禁用、过期、<code>qq</code>/<code>name</code> 缺失、DB 异常、限流、CRUD、组合唯一性、导入导出、日志脱敏与 <code>matchedBy</code>；<strong>审批同步</strong>：新建、幂等且不覆盖运营改动、游戏ID 变更后重建、不动人工条目、缺 QQ 拒绝、格式非法拒绝、未提交游戏ID 落成不限定</td>
 </tr>
 <tr>
 <td><code>BetaVerifyContractTest</code></td>
@@ -391,9 +483,15 @@ ALTER TABLE northstar_verify_log     DROP COLUMN player_uuid;
 <td>4</td>
 <td><strong>真实 HTTP</strong>：接口 A 匿名可达且契约正确（含游戏ID 三分支）、同一 QQ 多绑定、管理接口需鉴权、既有 <code>/api/beta/check</code> 未被影响</td>
 </tr>
+<tr>
+<td><code>BetaApprovalWhitelistSyncTest</code></td>
+<td>3</td>
+<td><strong>真实 HTTP</strong>：审批同步出的条目能通过校验且换游戏ID 被拒、重复审批不产生重复条目、缺 QQ 无法同步</td>
+</tr>
 </tbody>
 </table>
-<p><code>BetaVerifyEndToEndTest</code> 会真的启动 Tomcat 并用 <code>HttpClient</code> 打请求，是最接近线上的验证。</p>
+<p><code>BetaVerifyEndToEndTest</code> 与 <code>BetaApprovalWhitelistSyncTest</code> 会真的启动 Tomcat 并用 <code>HttpClient</code>
+打请求，是最接近线上的验证。项目当前全量 <strong>53 项全绿</strong>。</p>
 <h3 id="61">6.1 手工联调</h3>
 <pre><code class="language-bash">BASE=&quot;http://127.0.0.1:8080/api/beta/verify&quot;
 
@@ -423,7 +521,9 @@ curl -i &quot;$BASE?qq=123456789&quot;
 <h2 id="8">8. 已知取舍</h2>
 <ul>
 <li><strong>「游戏ID」比 UUID 更弱</strong>：离线模式下玩家名是玩家自己可改的，因此「QQ + 游戏ID」只能证明
-  "知道这个 QQ 且用了这个名字"，不等于强身份。要绑定真正的人，建议在发号环节人工核对游戏ID。</li>
+  "知道这个 QQ 且用了这个名字"，不等于强身份。要绑定真正的人，建议在发号环节人工核对游戏ID。
+  v3.1 起游戏ID 取自注册平台提交值（<code>users.mc_id</code>），比运营手填更可追溯，但<strong>仍是玩家自报</strong>，
+  性质没有变化。</li>
 <li><strong>限流是单机内存滑动窗口</strong>：重启清零、多实例不共享。当前规模够用；
   若横向扩容，建议换成 Redis 计数（项目已引入 <code>spring-boot-starter-data-redis</code>）。</li>
 <li><strong>接口无鉴权令牌</strong>：知道地址即可查询「某 QQ+游戏ID 是否有资格」。若需更强防护，

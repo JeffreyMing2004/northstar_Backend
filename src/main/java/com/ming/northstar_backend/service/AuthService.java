@@ -4,6 +4,7 @@ import com.ming.northstar_backend.dto.*;
 import com.ming.northstar_backend.entity.User;
 import com.ming.northstar_backend.repository.UserRepository;
 import com.ming.northstar_backend.security.JwtUtil;
+import com.ming.northstar_backend.support.QqFormat;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -16,15 +17,17 @@ public class AuthService {
     private final EmailService emailService;
     private final BetaService betaService;
     private final AdminAccessService adminAccessService;
+    private final QqFormat qqFormat;
 
     public AuthService(UserRepository userRepo, PasswordEncoder encoder, JwtUtil jwtUtil, EmailService emailService,
-                       BetaService betaService, AdminAccessService adminAccessService) {
+                       BetaService betaService, AdminAccessService adminAccessService, QqFormat qqFormat) {
         this.userRepo = userRepo;
         this.encoder = encoder;
         this.jwtUtil = jwtUtil;
         this.emailService = emailService;
         this.betaService = betaService;
         this.adminAccessService = adminAccessService;
+        this.qqFormat = qqFormat;
     }
 
     public AuthResponse login(LoginRequest req) {
@@ -44,6 +47,8 @@ public class AuthService {
         String username = req.getUsername() == null ? "" : req.getUsername().trim();
         String email = req.getEmail() == null ? "" : req.getEmail().trim();
         String mcId = req.getMcId() == null || req.getMcId().isBlank() ? null : req.getMcId().trim();
+        // QQ 号是内测资格校验的键之一，格式非法直接拒绝，避免脏数据流到白名单
+        String qq = qqFormat.require(req.getQq(), "QQ 号");
 
         if (username.isBlank()) {
             throw new RuntimeException("用户名不能为空");
@@ -65,6 +70,7 @@ public class AuthService {
         user.setUsername(username);
         user.setPassword(encoder.encode(req.getPassword()));
         user.setEmail(email);
+        user.setQq(qq.isEmpty() ? null : qq);
         user.setMcId(mcId);
         user = userRepo.save(user);
         user = betaService.claimApprovedEligibility(user);
@@ -83,6 +89,10 @@ public class AuthService {
         User user = userRepo.findById(userId)
             .orElseThrow(() -> new RuntimeException("用户不存在"));
         if (update.getEmail() != null) user.setEmail(update.getEmail());
+        if (update.getQq() != null) {
+            String qq = qqFormat.require(update.getQq(), "QQ 号");
+            user.setQq(qq.isEmpty() ? null : qq);
+        }
         if (update.getMcId() != null) user.setMcId(update.getMcId());
         user = userRepo.save(user);
         user = betaService.claimApprovedEligibility(user);
