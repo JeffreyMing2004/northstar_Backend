@@ -9,6 +9,7 @@ public class UserDto {
     private String username;
     private String email;
     private String qq;
+    private LocalDateTime qqBoundAt;
     private String mcId;
     private String rank;
     private Integer score;
@@ -33,6 +34,7 @@ public class UserDto {
         dto.username = u.getUsername();
         dto.email = u.getEmail();
         dto.qq = u.getQq();
+        dto.qqBoundAt = u.getQqBoundAt();
         dto.mcId = u.getMcId();
         dto.rank = u.getRank();
         dto.score = u.getScore();
@@ -54,6 +56,8 @@ public class UserDto {
     public void setEmail(String email) { this.email = email; }
     public String getQq() { return qq; }
     public void setQq(String qq) { this.qq = qq; }
+    public LocalDateTime getQqBoundAt() { return qqBoundAt; }
+    public void setQqBoundAt(LocalDateTime qqBoundAt) { this.qqBoundAt = qqBoundAt; }
     public String getMcId() { return mcId; }
     public void setMcId(String mcId) { this.mcId = mcId; }
     public String getRank() { return rank; }

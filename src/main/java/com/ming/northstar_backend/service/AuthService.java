@@ -4,6 +4,7 @@ import com.ming.northstar_backend.dto.*;
 import com.ming.northstar_backend.entity.User;
 import com.ming.northstar_backend.repository.UserRepository;
 import com.ming.northstar_backend.security.JwtUtil;
+import com.ming.northstar_backend.support.QqBinding;
 import com.ming.northstar_backend.support.QqFormat;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -70,7 +71,9 @@ public class AuthService {
         user.setUsername(username);
         user.setPassword(encoder.encode(req.getPassword()));
         user.setEmail(email);
-        user.setQq(qq.isEmpty() ? null : qq);
+        // 注册即首次绑定：走 QqBinding 而不是裸 setQq，这样绑定时间会被一并记录，
+        // 之后该账号在任何入口都不能再改（管理员纠错除外）
+        QqBinding.bind(user, qq);
         user.setMcId(mcId);
         user = userRepo.save(user);
         user = betaService.claimApprovedEligibility(user);
@@ -90,8 +93,9 @@ public class AuthService {
             .orElseThrow(() -> new RuntimeException("用户不存在"));
         if (update.getEmail() != null) user.setEmail(update.getEmail());
         if (update.getQq() != null) {
-            String qq = qqFormat.require(update.getQq(), "QQ 号");
-            user.setQq(qq.isEmpty() ? null : qq);
+            // QQ 一个账号只允许绑定一次：未绑定时这次提交会写入，已绑定后再改直接抛错。
+            // 留空不算解绑（bind 内部对空值直接返回 false），避免误传空串把绑定抹掉。
+            QqBinding.bind(user, qqFormat.require(update.getQq(), "QQ 号"));
         }
         if (update.getMcId() != null) user.setMcId(update.getMcId());
         user = userRepo.save(user);

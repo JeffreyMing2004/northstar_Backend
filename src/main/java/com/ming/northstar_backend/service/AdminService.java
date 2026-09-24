@@ -9,7 +9,10 @@ import com.ming.northstar_backend.repository.BetaApplicationRepository;
 import com.ming.northstar_backend.repository.MatchRecordRepository;
 import com.ming.northstar_backend.repository.RoomRepository;
 import com.ming.northstar_backend.repository.UserRepository;
+import com.ming.northstar_backend.support.QqBinding;
 import com.ming.northstar_backend.support.QqFormat;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,6 +27,8 @@ import java.util.stream.Collectors;
 public class AdminService {
 
     private static final Set<String> BETA_STATUSES = Set.of("none", "pending", "approved", "denied");
+
+    private static final Logger log = LoggerFactory.getLogger(AdminService.class);
 
     private final UserRepository userRepo;
     private final BetaApplicationRepository betaRepo;
@@ -128,7 +133,13 @@ public class AdminService {
             if (!qq.isBlank() && !qqFormat.isValid(qq)) {
                 throw new RuntimeException("QQ 号格式无效");
             }
-            user.setQq(qq.isBlank() ? null : qq);
+            // 玩家侧 QQ 只允许绑定一次；这里是唯一的强制改写通道（纠错用），
+            // 所以每次真的改动都留一条日志，方便日后追溯是谁改的、从什么改成了什么。
+            String before = user.getQq();
+            if (QqBinding.forceSet(user, qq)) {
+                log.info("管理员强制改写 QQ：用户 {}({}) {} -> {}", user.getUsername(), userId,
+                        before == null ? "(未绑定)" : before, qq.isBlank() ? "(已解绑)" : qq);
+            }
         }
         user.setUpdatedAt(LocalDateTime.now());
         user = userRepo.save(user);

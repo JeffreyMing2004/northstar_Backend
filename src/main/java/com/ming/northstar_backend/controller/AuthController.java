@@ -59,8 +59,14 @@ public class AuthController {
     @PutMapping("/profile")
     public ResponseEntity<ApiResponse<UserDto>> updateProfile(Authentication auth, @RequestBody UserDto update) {
         Long userId = (Long) auth.getPrincipal();
-        UserDto user = authService.updateProfile(userId, update);
-        return ResponseEntity.ok(ApiResponse.ok(user));
+        try {
+            UserDto user = authService.updateProfile(userId, update);
+            return ResponseEntity.ok(ApiResponse.ok(user));
+        } catch (RuntimeException e) {
+            // 例如「QQ 号已绑定，绑定后不可更改」。这条消息必须原样回到前端，
+            // 否则会落进 Spring 默认错误响应，玩家只看到一句没有信息量的「更新失败」。
+            return ResponseEntity.badRequest().body(ApiResponse.error(400, e.getMessage()));
+        }
     }
 
     @PostMapping("/bind-game")

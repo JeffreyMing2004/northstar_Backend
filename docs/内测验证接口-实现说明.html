@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>内测验证接口 — 实现说明 v3.1</title>
+<title>内测验证接口-实现说明</title>
 <style>
 :root{--bd:#e3e6ea;--tx:#1f2328;--tx2:#57606a;--bg:#fff;--soft:#f6f8fa;--acc:#185FA5;}
 *{box-sizing:border-box}
@@ -158,6 +158,16 @@ src/test/java/com/ming/northstar_backend/
 ├── controller/BetaVerifyContractTest.java       新增   6 项（JSON 序列化契约）
 ├── BetaVerifyEndToEndTest.java                  新增   4 项（真实 HTTP）
 └── BetaApprovalWhitelistSyncTest.java           新增   3 项（审批同步 -&gt; 校验放行，真实 HTTP）
+
+v3.2 个人设置：QQ 只允许绑定一次（接口契约未变）：
+├── support/QqBinding.java                       新增  「绑定一次、不可更改」的唯一判定入口
+├── entity/User.java                             改动  新增 qqBoundAt（首次绑定时间）
+├── service/AuthService.java                     改动  注册与改资料都走 QqBinding
+├── service/AdminService.java                    改动  改写 QQ 收为显式强制通道并记日志
+├── controller/AuthController.java               改动  PUT /profile 透出业务错误原文（否则前端只看到 500）
+├── dto/UserDto.java                             改动  暴露 qqBoundAt
+├── support/QqBindingTest.java                   新增   5 项（规则单测）
+└── QqBindingEndToEndTest.java                   新增   3 项（真实 HTTP）
 </code></pre>
 <hr>
 <h2 id="2">2. ⚠️ 三条不能碰的红线</h2>
@@ -445,9 +455,41 @@ ALTER TABLE northstar_verify_log     DROP COLUMN player_uuid;
 <strong>账号必须先有 QQ 才能获批</strong>——QQ 缺失时审批会被拒绝并提示先去补填，宁可审批失败，
 也不留下「后台显示已批准、玩家进游戏却被判未通过而崩溃」这种难查的状态。</p>
 <p>QQ 的来源：注册平台在注册时要求填（<code>RegisterRequest.qq</code> → <code>users.qq</code>）；
-存量账号可由管理员在「编辑玩家」弹窗补填，或玩家自己调 <code>PUT /api/auth/profile</code>。
+<strong>QQ 一个账号只允许绑定一次，绑定后不可更改</strong>（见 §5.4）。
 格式判定统一走 <code>support/QqFormat</code>（配置项 <code>northstar.verify.qq-pattern</code>），
 避免出现「注册能过、白名单导入却报错」这类不一致。</p>
+<hr>
+<h3 id="54-qq">5.4 QQ 只允许绑定一次</h3>
+<p>规则：<strong>一个账号只能绑定一次 QQ，绑定后玩家不可自行更改</strong>。判定集中在
+<code>support/QqBinding</code>，注册、改资料、后台管理三条路径共用同一份逻辑，避免某一处漏改就绕过去。</p>
+<table>
+<thead>
+<tr>
+<th>入口</th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>注册（<code>AuthService.register</code>）</td>
+<td>提交即视为首次绑定，同时写入 <code>qq_bound_at</code></td>
+</tr>
+<tr>
+<td>改资料（<code>AuthService.updateProfile</code>）</td>
+<td>未绑定 → 写入；已绑定且值不同 → <strong>抛错</strong>；值相同 → 幂等返回；空值 → 不生效（不能借此解绑）</td>
+</tr>
+<tr>
+<td>后台（<code>AdminService.updateUser</code>）</td>
+<td><code>QqBinding.forceSet</code>：唯一的强制通道，玩家侧无此路径。每次真的改动都写 INFO 日志（谁、从什么改成什么）；传空串即解绑，玩家可重绑一次</td>
+</tr>
+</tbody>
+</table>
+<p>为什么不让玩家改：白名单以 QQ 为键，QQ 就是内测资格的唯一凭据。允许改绑等于允许把资格
+转给他人。代价是玩家自己填错就卡住了，所以留了管理员强制通道，并在前端把「绑定后不可更改」
+在二次确认里说清楚。</p>
+<p><strong>错误消息必须原样回到前端</strong>：<code>PUT /api/auth/profile</code> 原本没有 try/catch，抛出的
+<code>RuntimeException</code> 会落进 Spring 默认错误响应（500），前端只能提示「更新失败」。
+现在与登录 / 注册 / 绑定游戏ID 一致，返回 400 + 原文，玩家能直接看懂该怎么办。</p>
 <hr>
 <h2 id="6">6. 自测</h2>
 <pre><code class="language-bash"># 全量测试（用 H2，不会连生产库）
@@ -488,10 +530,20 @@ ALTER TABLE northstar_verify_log     DROP COLUMN player_uuid;
 <td>3</td>
 <td><strong>真实 HTTP</strong>：审批同步出的条目能通过校验且换游戏ID 被拒、重复审批不产生重复条目、缺 QQ 无法同步</td>
 </tr>
+<tr>
+<td><code>QqBindingTest</code></td>
+<td>5</td>
+<td>QQ 一次性绑定规则：首次绑定写入并记时间、改绑被拒且不留痕、重复提交幂等且不刷新时间、空值不解绑、管理员强制改写 / 解绑 / 重绑</td>
+</tr>
+<tr>
+<td><code>QqBindingEndToEndTest</code></td>
+<td>3</td>
+<td><strong>真实 HTTP</strong>：首次绑定成功且回 200、改绑回 400 且库中值不变、空值不改动、格式非法不占用唯一机会、管理员仍能纠正填错的 QQ</td>
+</tr>
 </tbody>
 </table>
-<p><code>BetaVerifyEndToEndTest</code> 与 <code>BetaApprovalWhitelistSyncTest</code> 会真的启动 Tomcat 并用 <code>HttpClient</code>
-打请求，是最接近线上的验证。项目当前全量 <strong>53 项全绿</strong>。</p>
+<p><code>BetaVerifyEndToEndTest</code>、<code>BetaApprovalWhitelistSyncTest</code> 与 <code>QqBindingEndToEndTest</code> 会真的启动
+Tomcat 并用 <code>HttpClient</code> 打请求，是最接近线上的验证。项目当前全量 <strong>61 项全绿</strong>。</p>
 <h3 id="61">6.1 手工联调</h3>
 <pre><code class="language-bash">BASE=&quot;http://127.0.0.1:8080/api/beta/verify&quot;
 

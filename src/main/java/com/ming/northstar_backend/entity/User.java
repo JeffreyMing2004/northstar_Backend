@@ -22,9 +22,16 @@ public class User {
     /**
      * 玩家 QQ 号。内测白名单以「QQ + 游戏ID」为键，注册时由玩家提交，
      * 审批通过后由系统同步成白名单条目。
+     *
+     * <p>该字段一个账号只允许绑定一次，绑定后玩家不能自行修改
+     * （判定见 {@link com.ming.northstar_backend.support.QqBinding}）。
+     * 只有管理员出于纠错目的才能强制改写白名单里的 QQ。</p>
      */
     @Column(length = 16)
     private String qq;
+
+    /** QQ 首次绑定的时间；为 null 表示尚未绑定。 */
+    private LocalDateTime qqBoundAt;
 
     /** 玩家提交的离线服游戏 ID（Minecraft ID）。 */
     @Column(length = 64)
@@ -57,6 +64,8 @@ public class User {
     public void setEmail(String email) { this.email = email; }
     public String getQq() { return qq; }
     public void setQq(String qq) { this.qq = qq; }
+    public LocalDateTime getQqBoundAt() { return qqBoundAt; }
+    public void setQqBoundAt(LocalDateTime qqBoundAt) { this.qqBoundAt = qqBoundAt; }
     public String getMcId() { return mcId; }
     public void setMcId(String mcId) { this.mcId = mcId; }
     public String getRank() { return rank; }
