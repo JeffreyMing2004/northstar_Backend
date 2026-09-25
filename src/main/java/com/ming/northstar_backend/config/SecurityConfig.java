@@ -48,6 +48,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/beta/verify").permitAll()
                 .requestMatchers("/api/beta/plans").permitAll()
                 .requestMatchers("/api/matches/recent").permitAll()
+                .requestMatchers("/api/feedback").permitAll()
                 .requestMatchers("/api/platform/stats").permitAll()
                 .requestMatchers("/api/bridge/**").permitAll()
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
