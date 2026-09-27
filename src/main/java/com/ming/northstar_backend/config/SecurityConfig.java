@@ -52,6 +52,9 @@ public class SecurityConfig {
                 .requestMatchers("/api/platform/stats").permitAll()
                 .requestMatchers("/api/bridge/**").permitAll()
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                // 错误页必须放行：否则任何 controller 异常转发到 /error 时都会被
+                // 当成匿名请求拒绝，真实错误被掩盖成无消息的 403。
+                .requestMatchers("/error").permitAll()
                 .anyRequest().authenticated()
             )
             .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);

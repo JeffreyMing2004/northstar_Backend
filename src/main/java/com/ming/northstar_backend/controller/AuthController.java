@@ -3,6 +3,7 @@ package com.ming.northstar_backend.controller;
 import com.ming.northstar_backend.dto.*;
 import com.ming.northstar_backend.service.AuthService;
 import com.ming.northstar_backend.service.EmailService;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -52,8 +53,14 @@ public class AuthController {
     @GetMapping("/profile")
     public ResponseEntity<ApiResponse<UserDto>> getProfile(Authentication auth) {
         Long userId = (Long) auth.getPrincipal();
-        UserDto user = authService.getProfile(userId);
-        return ResponseEntity.ok(ApiResponse.ok(user));
+        try {
+            return ResponseEntity.ok(ApiResponse.ok(authService.getProfile(userId)));
+        } catch (RuntimeException e) {
+            // token 指向的用户已不存在（例如切换/重置数据库后旧 token 失效）。
+            // 返回 401 让前端拦截器自动登出并跳转登录页，而不是停在报错页面。
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResponse.error(401, "登录状态已失效，请重新登录"));
+        }
     }
 
     @PutMapping("/profile")
