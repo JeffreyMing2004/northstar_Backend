@@ -10,6 +10,7 @@ import com.ming.northstar_backend.repository.UserRepository;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Set;
 
@@ -126,5 +127,54 @@ public class BugReportService {
         report = bugReportRepository.save(report);
 
         return BugReportDto.from(report);
+    }
+
+    private static final DateTimeFormatter CSV_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    /**
+     * 将全部反馈导出为 CSV 文本，按提交时间倒序。
+     *
+     * <p>开头带 UTF-8 BOM，保证 Excel 直接双击打开中文不乱码。</p>
+     */
+    public String exportCsv() {
+        StringBuilder csv = new StringBuilder("\uFEFF");
+        csv.append("提交编号,用户名,QQ,问题分类,问题描述,状态,管理员备注,处理人,处理时间,提交时间\r\n");
+        for (BugReportDto report : listAll()) {
+            csv.append(csvField(report.getReportNo())).append(',')
+                    .append(csvField(report.getUsername())).append(',')
+                    .append(csvField(report.getQq())).append(',')
+                    .append(csvField(report.getCategory())).append(',')
+                    .append(csvField(report.getDescription())).append(',')
+                    .append(csvField(report.getStatus())).append(',')
+                    .append(csvField(report.getAdminNote())).append(',')
+                    .append(csvField(report.getProcessedBy())).append(',')
+                    .append(csvField(formatTime(report.getProcessedAt()))).append(',')
+                    .append(csvField(formatTime(report.getCreatedAt())))
+                    .append("\r\n");
+        }
+        return csv.toString();
+    }
+
+    private static String formatTime(LocalDateTime time) {
+        return time == null ? "" : time.format(CSV_TIME_FORMAT);
+    }
+
+    /**
+     * 按 RFC 4180 转义单个字段：包含逗号、引号或换行时加引号包裹，内部引号翻倍。
+     *
+     * <p>对以公式字符开头的内容加单引号前缀，防止导出文件在 Excel 中被当作公式执行（OWASP 建议）。</p>
+     */
+    private static String csvField(String value) {
+        if (value == null || value.isEmpty()) {
+            return "";
+        }
+        String escaped = value;
+        if ("=+-@\t\r".indexOf(escaped.charAt(0)) >= 0) {
+            escaped = "'" + escaped;
+        }
+        if (escaped.contains(",") || escaped.contains("\"") || escaped.contains("\n") || escaped.contains("\r")) {
+            escaped = '"' + escaped.replace("\"", "\"\"") + '"';
+        }
+        return escaped;
     }
 }

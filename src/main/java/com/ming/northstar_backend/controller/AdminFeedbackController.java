@@ -4,10 +4,15 @@ import com.ming.northstar_backend.dto.ApiResponse;
 import com.ming.northstar_backend.dto.BugReportDto;
 import com.ming.northstar_backend.dto.BugReportProcessRequest;
 import com.ming.northstar_backend.service.BugReportService;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 @RestController
@@ -23,6 +28,16 @@ public class AdminFeedbackController {
     @GetMapping
     public ResponseEntity<ApiResponse<List<BugReportDto>>> list() {
         return ResponseEntity.ok(ApiResponse.ok(bugReportService.listAll()));
+    }
+
+    @GetMapping("/export")
+    public ResponseEntity<byte[]> exportCsv() {
+        String filename = "feedback-"
+                + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + ".csv";
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=" + filename)
+                .contentType(MediaType.parseMediaType("text/csv;charset=UTF-8"))
+                .body(bugReportService.exportCsv().getBytes(StandardCharsets.UTF_8));
     }
 
     @PatchMapping("/{id}")
