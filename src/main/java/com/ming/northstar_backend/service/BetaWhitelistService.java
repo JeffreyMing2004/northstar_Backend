@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -18,8 +19,6 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.stream.Collectors;
 
 /**
@@ -33,8 +32,8 @@ import java.util.stream.Collectors;
  * <ol>
  *   <li>QQ 必须在白名单中，且条目处于「启用且未过期」状态</li>
  *   <li>若条目绑定了游戏 ID（{@code mcId}），上报的游戏 ID 必须与之一致（忽略大小写）</li>
- *   <li>若条目未绑定游戏 ID，则在 {@code northstar.verify.require-mc-id=false}（默认）时
- *       按任意游戏 ID 放行；置为 {@code true} 则一律判为未通过</li>
+ *   <li>若条目未绑定游戏 ID，则在 {@code northstar.verify.require-mc-id=true}（默认）时
+ *       一律判为未通过；只有显式关掉严格模式才会按任意游戏 ID 放行</li>
  * </ol>
  *
  * <p>白名单条目的来源分两类：运营在后台手工录入 / 导入的（{@code source=manual}），
@@ -57,19 +56,21 @@ public class BetaWhitelistService {
     private final BetaWhitelistRepository whitelistRepo;
     private final BetaVerifyLogRepository logRepo;
     private final QqFormat qqFormat;
+    private final RateLimitService rateLimitService;
     private final int rateLimitPerMinute;
     /** 是否强制要求白名单条目已绑定游戏 ID。 */
     private final boolean requireGameId;
-    private final Map<String, ConcurrentLinkedDeque<Long>> rateHits = new ConcurrentHashMap<>();
 
     public BetaWhitelistService(BetaWhitelistRepository whitelistRepo,
                                 BetaVerifyLogRepository logRepo,
                                 QqFormat qqFormat,
+                                RateLimitService rateLimitService,
                                 @Value("${northstar.verify.rate-limit-per-minute:60}") int rateLimitPerMinute,
-                                @Value("${northstar.verify.require-mc-id:false}") boolean requireGameId) {
+                                @Value("${northstar.verify.require-mc-id:true}") boolean requireGameId) {
         this.whitelistRepo = whitelistRepo;
         this.logRepo = logRepo;
         this.qqFormat = qqFormat;
+        this.rateLimitService = rateLimitService;
         this.rateLimitPerMinute = rateLimitPerMinute;
         this.requireGameId = requireGameId;
     }
@@ -176,30 +177,16 @@ public class BetaWhitelistService {
         }
     }
 
-    /** 内存滑动窗口限流，按来源 IP 计。{@code rateLimitPerMinute <= 0} 表示不限流。 */
+    /**
+     * 按来源 IP 限流。计数放在 Redis（原实现是进程内存滑动窗口）：
+     * 内存计数在「反代未还原真实 IP」时会让整群玩家共享同一个桶而被误判 429，
+     * 攻击者也可以跨实例分散请求绕过（NS-09）。{@code rateLimitPerMinute <= 0} 表示不限流。
+     */
     private boolean allowRequest(String ip) {
         if (rateLimitPerMinute <= 0) {
             return true;
         }
-        String key = ip == null || ip.isBlank() ? "unknown" : ip;
-        long now = System.currentTimeMillis();
-        long windowStart = now - 60_000L;
-
-        ConcurrentLinkedDeque<Long> hits = rateHits.computeIfAbsent(key, k -> new ConcurrentLinkedDeque<>());
-        synchronized (hits) {
-            while (!hits.isEmpty() && hits.peekFirst() < windowStart) {
-                hits.pollFirst();
-            }
-            if (hits.size() >= rateLimitPerMinute) {
-                return false;
-            }
-            hits.addLast(now);
-        }
-        // 防止 IP 数量无限增长
-        if (rateHits.size() > 5000) {
-            rateHits.entrySet().removeIf(entry -> entry.getValue().isEmpty());
-        }
-        return true;
+        return rateLimitService.allow("beta-verify-ip", ip, rateLimitPerMinute, Duration.ofMinutes(1));
     }
 
     private BetaVerifyLog newLog(String qq, String name, String ip, String userAgent) {

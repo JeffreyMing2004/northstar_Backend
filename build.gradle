@@ -45,6 +45,26 @@ tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
 }
 
+// 本地开发配置绝不进构建产物。
+//
+// .gitignore 只能保证它不被提交，挡不住 Gradle 的 processResources 把
+// src/main/resources 下的一切照抄进 jar：一旦按本机配置打出的包被直接部署，
+// 生产就会「带着开发默认值」运行——数据库地址、口令、JWT 密钥全部来自开发文件，
+// 这正是渗透报告 NS-01 / NS-02 的事故形状。
+//
+// 只排除打包，不影响本机 IDE / bootRun 的 classpath（本地仍然读得到该文件）。
+tasks.named('bootJar') {
+    exclude '**/application-local.properties'
+    exclude '**/*-local.properties'
+    exclude '**/.env'
+}
+
+tasks.named('jar') {
+    exclude '**/application-local.properties'
+    exclude '**/*-local.properties'
+    exclude '**/.env'
+}
+
 tasks.named('test') {
     useJUnitPlatform()
 }

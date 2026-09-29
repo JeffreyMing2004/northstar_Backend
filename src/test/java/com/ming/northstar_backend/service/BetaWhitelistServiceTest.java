@@ -16,8 +16,10 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -37,13 +39,16 @@ class BetaWhitelistServiceTest {
 
     private BetaWhitelistRepository whitelistRepo;
     private BetaVerifyLogRepository logRepo;
+    private RateLimitService rateLimitService;
     private BetaWhitelistService service;
 
     @BeforeEach
     void setUp() {
         whitelistRepo = mock(BetaWhitelistRepository.class);
         logRepo = mock(BetaVerifyLogRepository.class);
-        service = new BetaWhitelistService(whitelistRepo, logRepo, new QqFormat(QQ_PATTERN), 60, false);
+        rateLimitService = mock(RateLimitService.class);
+        when(rateLimitService.allow(anyString(), any(), anyInt(), any())).thenReturn(true);
+        service = new BetaWhitelistService(whitelistRepo, logRepo, new QqFormat(QQ_PATTERN), rateLimitService, 60, false);
     }
 
     // ---------------- 接口 A：身份判定（QQ + 游戏ID） ----------------
@@ -105,7 +110,8 @@ class BetaWhitelistServiceTest {
 
     @Test
     void rejectsUnboundQqWhenRequireGameIdIsEnabled() {
-        BetaWhitelistService strict = new BetaWhitelistService(whitelistRepo, logRepo, new QqFormat(QQ_PATTERN), 60, true);
+        BetaWhitelistService strict = new BetaWhitelistService(whitelistRepo, logRepo,
+                new QqFormat(QQ_PATTERN), rateLimitService, 60, true);
         stubQq("123456789", entry("123456789", null, 1, null));
 
         BetaWhitelistService.VerifyOutcome outcome = strict.verify("123456789", "Steve", "1.2.3.4", "UA");
@@ -218,7 +224,10 @@ class BetaWhitelistServiceTest {
 
     @Test
     void rateLimitsPerIp() {
-        BetaWhitelistService limited = new BetaWhitelistService(whitelistRepo, logRepo, new QqFormat(QQ_PATTERN), 2, false);
+        RateLimitService limiter = mock(RateLimitService.class);
+        when(limiter.allow(anyString(), any(), anyInt(), any())).thenReturn(true, true, false, true);
+        BetaWhitelistService limited = new BetaWhitelistService(whitelistRepo, logRepo,
+                new QqFormat(QQ_PATTERN), limiter, 2, false);
         stubQq("123456789", entry("123456789", "Steve", 1, null));
 
         assertEquals(200, limited.verify("123456789", "Steve", "9.9.9.9", "UA").httpStatus());
@@ -228,6 +237,9 @@ class BetaWhitelistServiceTest {
         assertEquals(429, third.httpStatus());
         // 另一个 IP 不受影响
         assertEquals(200, limited.verify("123456789", "Steve", "8.8.8.8", "UA").httpStatus());
+        // 计数交由 Redis 实现，服务层只负责把「来源 IP」原样传下去（NS-09）
+        verify(limiter, times(3)).allow(eq("beta-verify-ip"), eq("9.9.9.9"), eq(2), any());
+        verify(limiter).allow(eq("beta-verify-ip"), eq("8.8.8.8"), eq(2), any());
     }
 
     // ---------------- 接口 B：管理 ----------------

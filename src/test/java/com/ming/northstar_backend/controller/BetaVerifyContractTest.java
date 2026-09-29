@@ -7,12 +7,14 @@ import com.ming.northstar_backend.dto.BetaVerifyResponse;
 import com.ming.northstar_backend.service.BetaPlanService;
 import com.ming.northstar_backend.service.BetaService;
 import com.ming.northstar_backend.service.BetaWhitelistService;
+import com.ming.northstar_backend.service.RateLimitService;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -36,7 +38,9 @@ class BetaVerifyContractTest {
     }
 
     private BetaController controller(BetaWhitelistService service) {
-        return new BetaController(mock(BetaService.class), mock(BetaPlanService.class), service);
+        RateLimitService limiter = mock(RateLimitService.class);
+        when(limiter.allow(anyString(), any(), anyInt(), any())).thenReturn(true);
+        return new BetaController(mock(BetaService.class), mock(BetaPlanService.class), service, limiter, 30);
     }
 
     @Test

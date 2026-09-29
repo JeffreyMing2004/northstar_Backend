@@ -6,6 +6,7 @@ import com.ming.northstar_backend.entity.User;
 import com.ming.northstar_backend.repository.MatchRecordRepository;
 import com.ming.northstar_backend.repository.UserRepository;
 import com.ming.northstar_backend.service.StatsService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -20,11 +21,15 @@ public class StatsController {
     private final StatsService statsService;
     private final MatchRecordRepository matchRepo;
     private final UserRepository userRepo;
+    /** 是否允许用自增主键查询公开战绩；默认关闭（NS-11 去自增化）。 */
+    private final boolean numericIdLookupEnabled;
 
-    public StatsController(StatsService statsService, MatchRecordRepository matchRepo, UserRepository userRepo) {
+    public StatsController(StatsService statsService, MatchRecordRepository matchRepo, UserRepository userRepo,
+                           @Value("${northstar.public.numeric-id-lookup-enabled:false}") boolean numericIdLookupEnabled) {
         this.statsService = statsService;
         this.matchRepo = matchRepo;
         this.userRepo = userRepo;
+        this.numericIdLookupEnabled = numericIdLookupEnabled;
     }
 
     @GetMapping("/stats/{username}")
@@ -36,10 +41,18 @@ public class StatsController {
         }
     }
 
+    /**
+     * 公开战绩查询。
+     *
+     * <p>{@code playerId} 只认用户名与游戏 ID；数字形式的主键查询默认关闭，
+     * 避免有人顺着 1、2、3… 把全站用户名与游戏 ID 遍历出来（NS-11）。
+     * 如确有依赖，可用 {@code northstar.public.numeric-id-lookup-enabled=true} 打开。</p>
+     */
     @GetMapping("/profile/{playerId}")
     public ResponseEntity<ApiResponse<PlayerStats>> getPublicProfile(@PathVariable String playerId) {
         try {
-            return ResponseEntity.ok(ApiResponse.ok(statsService.getPublicProfile(playerId)));
+            return ResponseEntity.ok(ApiResponse.ok(
+                    statsService.getPublicProfile(playerId, numericIdLookupEnabled)));
         } catch (RuntimeException e) {
             return ResponseEntity.status(404).body(ApiResponse.error(404, e.getMessage()));
         }

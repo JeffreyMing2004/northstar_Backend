@@ -2,6 +2,7 @@ package com.ming.northstar_backend.config;
 
 import com.ming.northstar_backend.security.JwtFilter;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -19,6 +20,7 @@ import java.util.List;
 
 @Configuration
 @EnableWebSecurity
+@EnableConfigurationProperties(AuthRateLimitProperties.class)
 public class SecurityConfig {
 
     private final JwtFilter jwtFilter;
@@ -37,7 +39,8 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/auth/login", "/api/auth/register", "/api/auth/send-code").permitAll()
+                .requestMatchers("/api/auth/login", "/api/auth/register", "/api/auth/send-code",
+                        "/api/auth/forgot-password/lookup", "/api/auth/reset-password").permitAll()
                 .requestMatchers("/api/public/**").permitAll()
                 .requestMatchers("/api/leaderboard").permitAll()
                 .requestMatchers("/api/stats/**").permitAll()
@@ -66,13 +69,25 @@ public class SecurityConfig {
         return new BCryptPasswordEncoder();
     }
 
+    /**
+     * 跨域策略。
+     *
+     * <p>改动点（NS-07）：{@code allowedHeaders} 由 {@code *} 收敛为白名单，
+     * 并显式暴露 {@code Retry-After} 供 429 提示用。允许的来源由
+     * {@code app.cors.allowed-origins} 决定——生产 profile 里只有一个正式域名，
+     * localhost 只存在于（不随构建产物分发的）开发 profile。</p>
+     */
     @Bean
     public CorsConfigurationSource corsConfig() {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(allowedOrigins);
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("*"));
+        config.setAllowedHeaders(List.of(
+                "Authorization", "Content-Type", "Accept", "Origin",
+                "X-Requested-With", "X-Northstar-Bridge-Token"));
+        config.setExposedHeaders(List.of("Retry-After"));
         config.setAllowCredentials(true);
+        config.setMaxAge(1800L);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);
         return source;

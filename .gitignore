@@ -42,3 +42,9 @@ out/
 .env
 *.local.properties
 *-local.properties
+
+# 本地安全修复说明里引用的报告原文含未修复漏洞细节与凭据线索，不要提交
+NorthStar-渗透测试报告-*.md
+
+# 工作区记忆（可能含部署线索）
+.workbuddy/

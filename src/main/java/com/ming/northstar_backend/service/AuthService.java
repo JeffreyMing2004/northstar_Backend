@@ -6,14 +6,19 @@ import com.ming.northstar_backend.repository.UserRepository;
 import com.ming.northstar_backend.security.JwtUtil;
 import com.ming.northstar_backend.support.McIdFormat;
 import com.ming.northstar_backend.support.OnceBinding;
+import com.ming.northstar_backend.support.PasswordPolicy;
 import com.ming.northstar_backend.support.QqFormat;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import java.util.Date;
 import java.util.Locale;
 
 @Service
 public class AuthService {
+
+    /** 用户不存在时也要跑一次 BCrypt，抹平「账号存在与否」的响应时间差（防枚举）。 */
+    private static final String TIMING_EQUALIZER_PASSWORD = "northstar-timing-equalizer";
 
     private final UserRepository userRepo;
     private final PasswordEncoder encoder;
@@ -23,10 +28,15 @@ public class AuthService {
     private final AdminAccessService adminAccessService;
     private final QqFormat qqFormat;
     private final BetaWhitelistService betaWhitelistService;
+    private final PasswordPolicy passwordPolicy;
+    private final AuthGuard authGuard;
+    private final TokenRevocationService revocationService;
+    private final String timingEqualizerHash;
 
     public AuthService(UserRepository userRepo, PasswordEncoder encoder, JwtUtil jwtUtil, EmailService emailService,
                        BetaService betaService, AdminAccessService adminAccessService, QqFormat qqFormat,
-                       BetaWhitelistService betaWhitelistService) {
+                       BetaWhitelistService betaWhitelistService, PasswordPolicy passwordPolicy,
+                       AuthGuard authGuard, TokenRevocationService revocationService) {
         this.userRepo = userRepo;
         this.encoder = encoder;
         this.jwtUtil = jwtUtil;
@@ -35,18 +45,103 @@ public class AuthService {
         this.adminAccessService = adminAccessService;
         this.qqFormat = qqFormat;
         this.betaWhitelistService = betaWhitelistService;
+        this.passwordPolicy = passwordPolicy;
+        this.authGuard = authGuard;
+        this.revocationService = revocationService;
+        this.timingEqualizerHash = encoder.encode(TIMING_EQUALIZER_PASSWORD);
     }
 
+    /** 兼容无 IP 的调用方；限流维度退化为账号。 */
     public AuthResponse login(LoginRequest req) {
-        User user = userRepo.findByUsername(req.getUsername())
-            .or(() -> userRepo.findByEmail(req.getUsername()))
+        return login(req, null);
+    }
+
+    /**
+     * 登录。
+     *
+     * <p>改动点（NS-08）：按「来源 IP」与「账号」双向限流，失败会计数并加渐进延迟，
+     * 成功即清零账号计数。失败文案保持统一，不暴露账号是否存在。</p>
+     */
+    public AuthResponse login(LoginRequest req, String clientIp) {
+        String account = req.getUsername() == null ? "" : req.getUsername().trim();
+        String password = req.getPassword() == null ? "" : req.getPassword();
+        authGuard.assertLoginAllowed(clientIp, account);
+
+        User user = userRepo.findByUsername(account)
+            .or(() -> userRepo.findByEmail(account))
             .orElse(null);
 
-        if (user == null || !encoder.matches(req.getPassword(), user.getPassword())) {
+        if (user == null) {
+            // 不存在的账号也走一次 BCrypt，避免时间差被用来枚举用户
+            encoder.matches(password, timingEqualizerHash);
+            authGuard.recordLoginFailure(clientIp, account);
+            throw new RuntimeException("用户名或密码错误");
+        }
+        if (!encoder.matches(password, user.getPassword())) {
+            authGuard.recordLoginFailure(clientIp, account);
             throw new RuntimeException("用户名或密码错误");
         }
 
+        authGuard.clearLoginFailures(account);
         String token = jwtUtil.generateToken(user.getId(), user.getUsername());
+        return new AuthResponse(token, toDto(user));
+    }
+
+    /** 忘记密码第一步：按注册邮箱检索账号身份，供用户确认后再发验证码。 */
+    public ForgotIdentityDto lookupForgotIdentity(String email, String clientIp) {
+        // 该接口会回显用户名与游戏 ID，属于敏感查询，先过 IP 限流（NS-03 / NS-11）
+        authGuard.assertForgotLookupAllowed(clientIp);
+        String value = email == null ? "" : email.trim();
+        if (value.isBlank()) {
+            throw new RuntimeException("请输入邮箱");
+        }
+        User user = userRepo.findByEmail(value)
+            .orElseThrow(() -> new RuntimeException("该邮箱尚未注册 NorthStar 账号"));
+        ForgotIdentityDto dto = new ForgotIdentityDto();
+        dto.setUsername(user.getUsername());
+        dto.setMcId(user.getMcId());
+        dto.setEmail(user.getEmail());
+        return dto;
+    }
+
+    /**
+     * 忘记密码最后一步：校验邮箱验证码后写入新密码。
+     *
+     * <p>验证码校验成功即视为邮箱所有权确认，直接签发新 token 让前端免二次登录。
+     * 同时作废该账号此前签发的所有令牌——重置密码通常意味着「账号可能已被他人掌握」，
+     * 不吊销存量令牌等于给攻击者留了 24 小时的后门（NS-01 / NS-03）。</p>
+     */
+    public AuthResponse resetPassword(ResetPasswordRequest req, String clientIp) {
+        authGuard.assertResetAllowed(clientIp);
+
+        String email = req.getEmail() == null ? "" : req.getEmail().trim();
+        String code = req.getEmailCode() == null ? "" : req.getEmailCode().trim();
+        String password = req.getNewPassword();
+
+        if (email.isBlank()) {
+            throw new RuntimeException("请输入邮箱");
+        }
+        if (code.isBlank()) {
+            throw new RuntimeException("请输入邮箱验证码");
+        }
+        // 与注册统一走同一套强度策略（NS-10）
+        passwordPolicy.validate(password, "新密码");
+
+        User user = userRepo.findByEmail(email)
+            .orElseThrow(() -> new RuntimeException("该邮箱尚未注册 NorthStar 账号"));
+        if (!emailService.verifyCode(email, code, "reset")) {
+            int left = emailService.remainingAttempts(email, "reset");
+            throw new RuntimeException(left > 0
+                    ? "验证码错误或已过期（剩余 " + left + " 次）"
+                    : "验证码错误次数过多，请重新获取验证码");
+        }
+
+        user.setPassword(encoder.encode(password));
+        user = userRepo.save(user);
+        revocationService.revokeAllForUser(user.getId());
+        // iat 推后 1 秒：否则新令牌会落在刚写入的吊销时间戳之内而被自己判为失效
+        String token = jwtUtil.generateToken(user.getId(), user.getUsername(),
+                new Date(System.currentTimeMillis() + 1000L));
         return new AuthResponse(token, toDto(user));
     }
 
@@ -60,11 +155,22 @@ public class AuthService {
         if (username.isBlank()) {
             throw new RuntimeException("用户名不能为空");
         }
+        if (username.length() > 32) {
+            throw new RuntimeException("用户名长度不能超过32个字符");
+        }
         if (email.isBlank()) {
             throw new RuntimeException("邮箱不能为空");
         }
-        if (!emailService.verifyCode(email, req.getEmailCode())) {
-            throw new RuntimeException("验证码错误或已过期");
+        if (email.length() > 128 || !email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")) {
+            throw new RuntimeException("邮箱格式无效");
+        }
+        // 注册与重置使用同一套密码强度策略（NS-10）
+        passwordPolicy.validate(req.getPassword(), "密码");
+        if (!emailService.verifyCode(email, req.getEmailCode(), "register")) {
+            int left = emailService.remainingAttempts(email, "register");
+            throw new RuntimeException(left > 0
+                    ? "验证码错误或已过期（剩余 " + left + " 次）"
+                    : "验证码错误次数过多，请重新获取验证码");
         }
         if (userRepo.existsByUsername(username)) {
             throw new RuntimeException("用户名已被注册");

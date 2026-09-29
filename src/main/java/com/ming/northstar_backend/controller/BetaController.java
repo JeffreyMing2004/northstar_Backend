@@ -4,11 +4,16 @@ import com.ming.northstar_backend.dto.*;
 import com.ming.northstar_backend.service.BetaPlanService;
 import com.ming.northstar_backend.service.BetaService;
 import com.ming.northstar_backend.service.BetaWhitelistService;
+import com.ming.northstar_backend.service.RateLimitService;
+import com.ming.northstar_backend.support.ClientIp;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Duration;
 import java.util.List;
 
 @RestController
@@ -18,12 +23,18 @@ public class BetaController {
     private final BetaService betaService;
     private final BetaPlanService betaPlanService;
     private final BetaWhitelistService betaWhitelistService;
+    private final RateLimitService rateLimitService;
+    private final int checkLimitPerMinute;
 
     public BetaController(BetaService betaService, BetaPlanService betaPlanService,
-                          BetaWhitelistService betaWhitelistService) {
+                          BetaWhitelistService betaWhitelistService,
+                          RateLimitService rateLimitService,
+                          @Value("${northstar.public.beta-check-limit-per-minute:30}") int checkLimitPerMinute) {
         this.betaService = betaService;
         this.betaPlanService = betaPlanService;
         this.betaWhitelistService = betaWhitelistService;
+        this.rateLimitService = rateLimitService;
+        this.checkLimitPerMinute = checkLimitPerMinute;
     }
 
     @GetMapping("/plans")
@@ -31,8 +42,21 @@ public class BetaController {
         return ResponseEntity.ok(ApiResponse.ok(betaPlanService.listPublicPlans()));
     }
 
+    /**
+     * 查询某个账号的内测状态（permitAll）。
+     *
+     * <p>该接口会明确回显「命中 / 未命中」，是账号枚举的入口之一（NS-11），
+     * 因此加了一层按来源 IP 的限流；命中与否的文案保持不变以免破坏前端流程。</p>
+     */
     @GetMapping("/check")
-    public ResponseEntity<ApiResponse<BetaCheckResponse>> checkBeta(@RequestParam String query) {
+    public ResponseEntity<ApiResponse<BetaCheckResponse>> checkBeta(@RequestParam String query,
+                                                                   HttpServletRequest request) {
+        String ip = ClientIp.of(request);
+        if (!rateLimitService.allow("beta-check-ip", ip, checkLimitPerMinute, Duration.ofMinutes(1))) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .header("Retry-After", "60")
+                    .body(ApiResponse.error(429, "查询过于频繁，请稍后再试"));
+        }
         BetaCheckResponse res = betaService.checkBeta(query);
         if (res == null) {
             return ResponseEntity.ok(ApiResponse.error(404, "未找到该账号"));
@@ -64,7 +88,7 @@ public class BetaController {
             @RequestParam(value = "name", required = false) String name,
             HttpServletRequest request) {
         BetaWhitelistService.VerifyOutcome outcome = betaWhitelistService.verify(
-                qq, name, resolveClientIp(request), request.getHeader("User-Agent"));
+                qq, name, ClientIp.of(request), request.getHeader("User-Agent"));
         return ResponseEntity.status(outcome.httpStatus()).body(outcome.body());
     }
 
@@ -96,21 +120,12 @@ public class BetaController {
     }
 
     /**
-     * 解析客户端真实 IP。生产环境前面有 Nginx / OpenResty，直连地址恒为 127.0.0.1，
-     * 因此优先取反向代理写入的请求头。
+     * 解析客户端真实 IP。统一走 {@link ClientIp}：生产配置了
+     * {@code server.forward-headers-strategy=framework} 后，
+     * {@code request.getRemoteAddr()} 已被框架还原为反代写入的真实来源，
+     * 只有它仍是回环地址时才退回代理头解析。
      */
     static String resolveClientIp(HttpServletRequest request) {
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            String first = forwarded.split(",")[0].trim();
-            if (!first.isEmpty() && !"unknown".equalsIgnoreCase(first)) {
-                return first;
-            }
-        }
-        String realIp = request.getHeader("X-Real-IP");
-        if (realIp != null && !realIp.isBlank() && !"unknown".equalsIgnoreCase(realIp)) {
-            return realIp.trim();
-        }
-        return request.getRemoteAddr();
+        return ClientIp.of(request);
     }
 }

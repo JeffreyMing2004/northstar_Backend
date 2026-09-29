@@ -76,7 +76,19 @@ public class StatsService {
     }
 
     public PlayerStats getPublicProfile(String playerId) {
-        User user = resolvePlayer(playerId)
+        return getPublicProfile(playerId, false);
+    }
+
+    /**
+     * 公开战绩。
+     *
+     * @param allowNumericId 是否允许用连续自增的主键 ID 查询。默认关闭：
+     *                       {@code /api/profile/{playerId}} 是 permitAll，
+     *                       放行自增 ID 等于给出一把可以遍历全站用户名的钥匙（NS-11）。
+     *                       前端实际只传用户名或游戏 ID，因此关闭后不影响正常功能。
+     */
+    public PlayerStats getPublicProfile(String playerId, boolean allowNumericId) {
+        User user = resolvePlayer(playerId, allowNumericId)
             .orElseThrow(() -> new RuntimeException("玩家不存在"));
         return getPlayerStats(user.getUsername());
     }
@@ -87,7 +99,7 @@ public class StatsService {
         } catch (Exception ignored) {}
     }
 
-    private java.util.Optional<User> resolvePlayer(String playerId) {
+    private java.util.Optional<User> resolvePlayer(String playerId, boolean allowNumericId) {
         String value = playerId == null ? "" : playerId.trim();
         java.util.Optional<User> byUsername = userRepo.findByUsername(value);
         if (byUsername.isPresent()) return byUsername;
@@ -95,7 +107,7 @@ public class StatsService {
         java.util.Optional<User> byMcId = userRepo.findByMcId(value);
         if (byMcId.isPresent()) return byMcId;
 
-        if (value.matches("\\d+")) {
+        if (allowNumericId && value.matches("\\d+")) {
             try {
                 return userRepo.findById(Long.parseLong(value));
             } catch (NumberFormatException ignored) {}
