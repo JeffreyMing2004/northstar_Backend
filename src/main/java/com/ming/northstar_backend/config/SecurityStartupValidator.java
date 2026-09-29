@@ -29,13 +29,15 @@ import java.util.regex.Pattern;
  *       且不在已知弱值/占位值名单里。</li>
  *   <li>{@code northstar.bridge.secret}：必须存在、长度 ≥ 16、
  *       且不再是 {@code local-bridge-secret} 这类默认值。</li>
- *   <li><b>开发 profile 兜底防护</b>（对应 NS-01 的根因
+ *   <li><b>远程数据层隔离</b>（对应 NS-01 的根因
  *       {@code spring.profiles.active=${SPRING_PROFILES_ACTIVE:local}}）：
- *       当生效 profile 是 {@code local} 且连接的不是本机数据库、同时
- *       {@code ddl-auto} 仍为 {@code update} 时拒绝启动——
- *       这正是「生产忘了设 SPRING_PROFILES_ACTIVE 于是跑在 local 上」这台事故车的形状。
- *       本机开发只要在（被 gitignore 的）{@code application-local.properties}
- *       里显式写 {@code northstar.security.allow-dev-profile-on-remote-db=true} 即可放行。</li>
+ *       数据库与 Redis 的地址只要不在本机，就必须运行在 {@code prod} profile 下。
+ *       开发 profile（显式 {@code local}，或任何 profile 都没设）一旦指向远程地址
+ *       <b>直接拒绝启动</b>——远程数据层只允许上线环境连接。
+ *       这一条同时挡住了「生产忘记设 SPRING_PROFILES_ACTIVE 于是静默连上真实数据」，
+ *       因为那种情况下 profile 会落回开发值，而地址是远程的。</li>
+ *   <li>生产 profile 下 {@code ddl-auto} 仍是 {@code update/create/create-drop} 时给出告警
+ *       （NS-12：生产不应让 Hibernate 自动改表）。</li>
  * </ol>
  */
 @Component
@@ -67,7 +69,10 @@ public class SecurityStartupValidator {
             "f88fe7a3fbeebc5f4b0015ab451f99b2c0d2dc2ba576930214d59ec4105e8244"
     );
 
-    private static final Pattern HOST_IN_JDBC = Pattern.compile("jdbc:mysql://([^/:?]+)");
+    /** 从 JDBC URL 取出主机名，兼顾 {@code jdbc:mysql://}、{@code jdbc:h2:tcp://} 等写法。 */
+    private static final Pattern HOST_IN_JDBC = Pattern.compile("jdbc:[a-zA-Z0-9]+://([^/:?]+)");
+    /** IPv4 回环段：127.0.0.0/8 整段都指向本机。 */
+    private static final Pattern LOOPBACK_IPV4 = Pattern.compile("127(?:\\.\\d{1,3}){3}");
     private static final int MIN_JWT_SECRET_BYTES = 32;
     private static final int MIN_BRIDGE_SECRET_LENGTH = 16;
 
@@ -76,36 +81,33 @@ public class SecurityStartupValidator {
     private final String bridgeSecret;
     private final String datasourceUrl;
     private final String ddlAuto;
-    private final boolean strictDevProfile;
-    private final boolean allowRemoteDbInDev;
     private final String bridgeAllowedIps;
     private final String redisPassword;
+    private final String redisHost;
 
     public SecurityStartupValidator(Environment environment,
                                     @Value("${jwt.secret:}") String jwtSecret,
                                     @Value("${northstar.bridge.secret:}") String bridgeSecret,
                                     @Value("${spring.datasource.url:}") String datasourceUrl,
                                     @Value("${spring.jpa.hibernate.ddl-auto:}") String ddlAuto,
-                                    @Value("${northstar.security.strict-dev-profile:true}") boolean strictDevProfile,
-                                    @Value("${northstar.security.allow-dev-profile-on-remote-db:false}") boolean allowRemoteDbInDev,
                                     @Value("${northstar.bridge.allowed-ips:}") String bridgeAllowedIps,
-                                    @Value("${spring.data.redis.password:}") String redisPassword) {
+                                    @Value("${spring.data.redis.password:}") String redisPassword,
+                                    @Value("${spring.data.redis.host:}") String redisHost) {
         this.environment = environment;
         this.jwtSecret = jwtSecret;
         this.bridgeSecret = bridgeSecret;
         this.datasourceUrl = datasourceUrl;
         this.ddlAuto = ddlAuto;
-        this.strictDevProfile = strictDevProfile;
-        this.allowRemoteDbInDev = allowRemoteDbInDev;
         this.bridgeAllowedIps = bridgeAllowedIps;
         this.redisPassword = redisPassword;
+        this.redisHost = redisHost;
     }
 
     @PostConstruct
     public void verify() {
         checkJwtSecret();
         checkBridgeSecret();
-        checkDevProfileFallback();
+        checkDataLayerIsolation();
         warnAboutSoftSpots();
     }
 
@@ -155,9 +157,16 @@ public class SecurityStartupValidator {
     }
 
     /**
-     * 开发 profile 兜底防护：把「生产忘了设 profile」变成启动失败，而不是静默使用开发配置。
+     * 远程数据层隔离：<b>远程数据库与远程 Redis 只允许上线环境（prod profile）连接。</b>
+     *
+     * <p>开发 profile（显式 {@code local}，或任何 profile 都没设）只要把地址指向非本机，
+     * 就直接拒绝启动。这里刻意<b>不提供任何放行开关</b>：只要存在「显式声明即可连远程库」
+     * 的开关，就意味着生产忘记设 {@code SPRING_PROFILES_ACTIVE=prod} 时那套配置依然成立、
+     * 依然会静默连上真实数据——那正是 NS-01 的事故形状。</p>
+     *
+     * <p>本机开发请使用本机 MySQL / Redis（默认 {@code 127.0.0.1}）。</p>
      */
-    private void checkDevProfileFallback() {
+    private void checkDataLayerIsolation() {
         List<String> profiles = Arrays.stream(environment.getActiveProfiles())
                 .map(p -> p.toLowerCase(Locale.ROOT))
                 .toList();
@@ -167,25 +176,38 @@ public class SecurityStartupValidator {
             log.warn("[NorthStar] 当前运行在 local（开发）profile。"
                     + "生产环境必须显式设置 SPRING_PROFILES_ACTIVE=prod。");
         }
+
         if (!developmentProfile) {
+            String ddl = ddlAuto == null ? "" : ddlAuto.trim().toLowerCase(Locale.ROOT);
+            if ("update".equals(ddl) || "create".equals(ddl) || "create-drop".equals(ddl)) {
+                log.warn("[NorthStar] 生产 profile 下 ddl-auto=" + ddl
+                        + "：Hibernate 仍会自动改表（NS-12），建议改为 validate。");
+            }
             return;
         }
-        String ddl = ddlAuto == null ? "" : ddlAuto.trim().toLowerCase(Locale.ROOT);
-        boolean autoDdl = "update".equals(ddl) || "create".equals(ddl) || "create-drop".equals(ddl);
-        String host = resolveDatabaseHost();
-        boolean remoteDatabase = host != null && !isLocalHost(host);
 
-        if (strictDevProfile && autoDdl && remoteDatabase && !allowRemoteDbInDev) {
+        String databaseHost = resolveDatabaseHost();
+        if (databaseHost != null && !isLocalHost(databaseHost)) {
             throw new IllegalStateException(banner(
-                    "检测到「开发 profile + 远程数据库 + 自动改表」的危险组合",
-                    "数据库地址 " + host + "，ddl-auto=" + ddl + "。\n"
-                            + "     这通常意味着生产忘记设置 SPRING_PROFILES_ACTIVE=prod，"
-                            + "从而落回了开发默认配置（渗透报告 NS-01 的根因）。\n"
-                            + "     正确做法：在生产显式设置 SPRING_PROFILES_ACTIVE=prod。\n"
-                            + "     若本机开发确实要连远程库，请在（已被 gitignore 的）"
-                            + "application-local.properties 中显式声明\n"
-                            + "     northstar.security.allow-dev-profile-on-remote-db=true"));
+                    "开发环境不允许连接远程数据库",
+                    "当前 profile=" + profileLabel(profiles) + "，而数据库地址为 " + databaseHost + "。\n"
+                            + "     远程数据库只允许在上线环境（prod profile）连接。\n"
+                            + "     本机开发请改用本机 MySQL（如 127.0.0.1:3306）；\n"
+                            + "     若这确实是上线机器，请显式设置 SPRING_PROFILES_ACTIVE=prod。"));
         }
+
+        String redis = redisHost == null ? "" : redisHost.trim();
+        if (!redis.isEmpty() && !isLocalHost(redis)) {
+            throw new IllegalStateException(banner(
+                    "开发环境不允许连接远程 Redis",
+                    "当前 profile=" + profileLabel(profiles) + "，而 Redis 地址为 " + redis + "。\n"
+                            + "     远程数据层只允许在上线环境（prod profile）连接；\n"
+                            + "     本机开发请改用本机 Redis（如 127.0.0.1:6379）。"));
+        }
+    }
+
+    private String profileLabel(List<String> profiles) {
+        return profiles.isEmpty() ? "(未显式设置)" : String.join(",", profiles);
     }
 
     private void warnAboutSoftSpots() {
@@ -225,9 +247,16 @@ public class SecurityStartupValidator {
         return null;
     }
 
+    /**
+     * 主机名是否指向本机。只有本机地址才允许在开发 profile 下使用——
+     * 远程数据层一律要求 prod profile（见 {@link #checkDataLayerIsolation()}）。
+     */
     private boolean isLocalHost(String host) {
-        String value = host.toLowerCase(Locale.ROOT);
-        return value.equals("localhost") || value.equals("127.0.0.1") || value.equals("::1")
+        String value = host == null ? "" : host.trim().toLowerCase(Locale.ROOT);
+        return value.equals("localhost")
+                || value.equals("::1")
+                || value.equals("0:0:0:0:0:0:0:1")
+                || LOOPBACK_IPV4.matcher(value).matches()
                 || value.endsWith(".local");
     }
 

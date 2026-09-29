@@ -1,0 +1,60 @@
+# ===========================================================================
+# 本机开发用的数据层（仅开发，切勿用于生产）
+#
+# 为什么需要它：SecurityStartupValidator 强制「远程数据库 / 远程 Redis 只允许
+# 上线环境（prod profile）连接」，开发 profile 指向远程地址会直接拒绝启动。
+# 因此本机必须自带一套数据层：
+#
+#     docker compose -f docker-compose.dev.yml up -d
+#
+# 账号与 .env 的默认值对齐：库名 web / 用户 web / 口令 northstar-dev。
+#
+# MySQL 特意固定 5.7.44 与生产同版本：不同版本之间的类型差异会让
+# ddl-auto=validate 误报字段不匹配（见 docs/SECURITY-REMEDIATION-20260929.md §2.7）。
+#
+# 文件名不是 docker-compose.yml，所以不会被 `docker compose up` 误加载，
+# 不会和生产环境的编排互相干扰。
+# ===========================================================================
+services:
+  mysql:
+    image: mysql:5.7.44
+    container_name: northstar-dev-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root-dev-only
+      MYSQL_DATABASE: web
+      MYSQL_USER: web
+      MYSQL_PASSWORD: northstar-dev
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - northstar-dev-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot-dev-only"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    container_name: northstar-dev-redis
+    restart: unless-stopped
+    # 只绑回环地址：本地 Redis 不设口令，绝不能对局域网/公网暴露
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - northstar-dev-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  northstar-dev-mysql:
+  northstar-dev-redis:

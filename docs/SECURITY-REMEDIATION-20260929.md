@@ -50,10 +50,21 @@
 | 判权来源 | `JwtFilter` 不再使用令牌里的 `username`：以 `sub`（userId）查 `users` 表，用数据库中的用户名判管理员。伪造令牌写谁的名字都换不到 `ROLE_ADMIN` |
 | 密钥强度 | 新增 `SecurityStartupValidator`：`jwt.secret` 缺失、仍为未解析占位符、不足 32 字节、或命中已知泄露值（含本次报告里的那串）→ **启动失败**（带修复指引） |
 | 默认值 | `application.properties` 中 `northstar.bridge.secret` 移除 `local-bridge-secret` 兜底；`spring.data.redis.host` 的硬编码 IP 默认值改为 `localhost`（生产值移入 prod profile） |
-| 开发兜底 | 「local profile + 远程数据库 + `ddl-auto=update`」组合直接拒绝启动；本机开发需在（被 gitignore 的）`application-local.properties` 或 `.env` 里显式声明 `northstar.security.allow-dev-profile-on-remote-db=true` |
+| 远程数据层隔离 | 数据库 / Redis 的地址只要不是本机，就必须运行在 `prod` profile 下；开发 profile（显式 `local`，或任何 profile 都没设）一旦指向远程地址 → **拒绝启动**。这是硬规则，**不提供任何放行开关**——本机开发改用 `docker-compose.dev.yml` 自带数据层 |
 | 令牌吊销 | 新增 `TokenRevocationService`：重置密码后按「用户 × 签发时间」作废该账号全部存量令牌，新令牌 `iat` 顺延 1 秒避免误伤自身 |
 
-**回归用例**：`JwtFilterTest`（6 例）、`SecurityStartupValidatorTest`（10 例）。
+**回归用例**：`JwtFilterTest`（6 例）、`SecurityStartupValidatorTest`（14 例）。
+
+> **本机开发怎么连数据库**：远程库只允许上线环境连接，所以本机必须自带数据层。
+> 仓库提供 `docker-compose.dev.yml`（MySQL **5.7.44**，与生产同版本 + Redis 7）：
+>
+> ```bash
+> docker compose -f docker-compose.dev.yml up -d
+> ```
+>
+> `.env` 已指向 `127.0.0.1`。这意味着**「本机连着生产库调试」这条路被正式关闭**；
+> 需要看真实数据时请走后台上报/导出，或临时在跳板机上操作。
+> 之所以要求与生产同版本：跨版本的类型差异会让 `ddl-auto=validate` 误报字段不匹配。
 
 ### 2.2 NS-03 / NS-08 / NS-10：认证链路防爆破
 
